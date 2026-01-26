@@ -1,0 +1,14 @@
+node_modules/
+__pycache__/
+*.pyc
+*.bak
+temp_*
+.env
+.vscode/
+*.log
+MunnaSoftware-win32-x64/
+out/
+dist/
+build/
+backend.spec
+backend.exe

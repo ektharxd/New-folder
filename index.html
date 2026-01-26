@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://unpkg.com; connect-src 'self' http: https: https://unpkg.com https://cdn.jsdelivr.net;">
+    <title>Finlogs</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="assets/finlogs.svg">
+    <link rel="stylesheet" href="index.css">
+    <!-- Ionicons for Icons -->
+    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+    <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Simple Login Screen -->
+    <div id="loginModal" class="login-background" style="display: flex;">
+        <div class="login-glass-card">
+            <h2 class="login-title">Finlogs</h2>
+            <p class="login-subtitle">Sign in to your account</p>
+
+            <div class="input-group">
+                <label>Company</label>
+                <select id="loginCompany" class="login-input"></select>
+            </div>
+
+            <div class="input-group">
+                <label>Create Company</label>
+                <div style="display:flex; gap:8px;">
+                    <input type="text" id="newCompanyName" class="login-input" placeholder="New company name">
+                    <button onclick="createCompany()" class="login-btn" style="width:auto; padding: 10px 14px;">Add</button>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label>Username</label>
+                <input type="text" id="loginUser" class="login-input" placeholder="Enter username" autocomplete="off">
+            </div>
+
+            <div class="input-group">
+                <label>Password</label>
+                <input type="password" id="loginPass" class="login-input" placeholder="Enter password"
+                    onkeydown="if(event.key==='Enter') handleLogin()">
+            </div>
+
+            <button onclick="handleLogin()" class="login-btn">Sign In</button>
+            <p id="loginError" class="error-msg"></p>
+            <a href="javascript:void(0)" onclick="showDbConfig()" style="display:block; text-align:center; margin-top:12px; color: #4A90E2; font-size: 13px; text-decoration: none;">⚙️ Configure Database</a>
+        </div>
+    </div>
+
+    <!-- Database Configuration Modal -->
+    <div id="dbConfigModal" class="login-background" style="display: none; z-index: 10001;">
+        <div class="login-glass-card" style="max-width: 500px;">
+            <h2 class="login-title">Database Configuration</h2>
+            <p class="login-subtitle">Configure SQL Server connection</p>
+
+            <div class="input-group">
+                <label>SQL Server Instance</label>
+                <input type="text" id="cfgServer" class="login-input" placeholder="e.g., localhost or SERVERNAME">
+                <small style="color: var(--text-secondary); font-size: 11px;">Use 'localhost' for default instance, 'localhost\SQLEXPRESS' for named instance</small>
+            </div>
+
+            <div class="input-group">
+                <label>API Server URL</label>
+                <input type="text" id="cfgApiBase" class="login-input" placeholder="http://SERVER_IP:8000">
+                <small style="color: var(--text-secondary); font-size: 11px;">Clients connect to this backend URL.</small>
+            </div>
+
+            <div class="input-group">
+                <label>Database Name</label>
+                <input type="text" id="cfgDatabase" class="login-input" placeholder="e.g., Munna_Accounts">
+            </div>
+
+            <div class="input-group">
+                <label>Authentication Type</label>
+                <select id="cfgAuthType" class="login-input" onchange="toggleSqlAuth()">
+                    <option value="windows">Windows Authentication</option>
+                    <option value="sql">SQL Server Authentication</option>
+                </select>
+            </div>
+
+            <div id="sqlAuthFields" style="display: none;">
+                <div class="input-group">
+                    <label>SQL Username</label>
+                    <input type="text" id="cfgUsername" class="login-input" placeholder="SQL Server username">
+                </div>
+                <div class="input-group">
+                    <label>SQL Password</label>
+                    <input type="password" id="cfgPassword" class="login-input" placeholder="SQL Server password">
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label>Backup Target Folder (UNC share)</label>
+                <input type="text" id="cfgBackupDir" class="login-input" placeholder="\\\\LAPTOP\\FinlogsBackups">
+                <small style="color: var(--text-secondary); font-size: 11px;">SQL Server must have write access to this shared folder.</small>
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button onclick="testDbConnection()" class="login-btn" style="flex: 1; background: #4CAF50;">Test Connection</button>
+                <button onclick="saveDbConfig()" class="login-btn" style="flex: 1;">Save & Apply</button>
+            </div>
+            <button onclick="closeDbConfig()" class="login-btn" style="margin-top: 8px; background: #666;">Cancel</button>
+            <p id="dbConfigStatus" class="error-msg"></p>
+        </div>
+    </div>
+
+    <div class="app-container" id="appContent" style="filter: blur(5px); pointer-events: none;">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="brand">
+                <ion-icon name="stats-chart" style="color: var(--accent);"></ion-icon>
+                Finlogs
+            </div>
+
+            <a class="nav-item active" onclick="showView('entryView'); activateNav(this)">
+                <ion-icon name="create-outline"></ion-icon> Daily Entry
+            </a>
+            <a class="nav-item" onclick="showDashboard(); activateNav(this)">
+                <ion-icon name="grid-outline"></ion-icon> Dashboard
+            </a>
+
+            <div class="nav-group-title">Reports</div>
+            <a class="nav-item" onclick="showView('ledgerView'); activateNav(this)">
+                <ion-icon name="book-outline"></ion-icon> Party Ledger
+            </a>
+            <a class="nav-item" onclick="showDailySummary(); activateNav(this)">
+                <ion-icon name="today-outline"></ion-icon> Daily Summary
+            </a>
+            <a class="nav-item" onclick="showShortReport(); activateNav(this)">
+                <ion-icon name="alert-outline"></ion-icon> Short Report
+            </a>
+            <a class="nav-item" onclick="showExpenseReport(); activateNav(this)">
+                <ion-icon name="wallet-outline"></ion-icon> Expenses
+            </a>
+            <a class="nav-item" onclick="showOutstanding(); activateNav(this)">
+                <ion-icon name="alert-circle-outline"></ion-icon> Outstanding
+            </a>
+            <a class="nav-item" onclick="showTrialBalance(); activateNav(this)">
+                <ion-icon name="swap-vertical-outline"></ion-icon> Trial Balance
+            </a>
+            <a class="nav-item" onclick="showPnL(); activateNav(this)">
+                <ion-icon name="trending-up-outline"></ion-icon> P & L
+            </a>
+
+            <div class="nav-group-title">Management</div>
+            <a class="nav-item" onclick="showView('partyView'); activateNav(this)">
+                <ion-icon name="people-outline"></ion-icon> Add Party
+            </a>
+            <a class="nav-item" onclick="showView('settingsView'); activateNav(this)">
+                <ion-icon name="settings-outline"></ion-icon> Settings
+            </a>
+
+            <div style="flex:1;"></div>
+            <a class="nav-item" onclick="handleLogout()" style="color: var(--danger);">
+                <ion-icon name="log-out-outline"></ion-icon> Logout
+            </a>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+
+            <!-- Daily Entry View -->
+            <div id="entryView" class="view-section active">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Daily Transactions <span id="txnPageInfo" style="font-size: 14px; font-weight: normal; color: var(--text-secondary);"></span></h2>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button onclick="loadTransactions(currentTxnPage - 1)" id="prevPageBtn" class="icon-btn" title="Previous Page" style="padding: 6px 10px;">
+                            <ion-icon name="chevron-back-outline"></ion-icon>
+                        </button>
+                        <span id="currentPageDisplay" style="font-size: 14px; min-width: 80px; text-align: center;">Page 1</span>
+                        <button onclick="loadTransactions(currentTxnPage + 1)" id="nextPageBtn" class="icon-btn" title="Next Page" style="padding: 6px 10px;">
+                            <ion-icon name="chevron-forward-outline"></ion-icon>
+                        </button>
+                        <input type="text" placeholder="Search..." onkeyup="filterTable('entryTable', this.value)"
+                            style="width: 200px; padding: 8px;">
+                    </div>
+                </div>
+                <div class="card" style="margin: 12px 0; padding: 12px;">
+                    <div style="display:grid; grid-template-columns: 140px 160px 1fr 140px 140px 160px; gap: 10px; align-items:center;">
+                        <input type="date" id="newDate">
+                        <input type="text" id="newBill" placeholder="Ref/Bill">
+                        <input type="text" id="newParty" list="partyList" placeholder="Select Party">
+                        <select id="newType">
+                            <option>Sale</option>
+                            <option>Sale Return</option>
+                            <option>Expense</option>
+                            <option>Receipt</option>
+                        </select>
+                        <select id="newMode">
+                            <option>Credit</option>
+                            <option>Cash</option>
+                            <option>UPI</option>
+                            <option>Bank</option>
+                        </select>
+                        <input type="number" id="newAmount" placeholder="0.00" onkeydown="checkEnter(event)">
+                    </div>
+                    <datalist id="partyList"></datalist>
+                    <div style="margin-top: 8px; text-align: right; color: var(--text-secondary); font-size: 13px;">
+                        Press <b>Enter</b> in Amount to Save automatically.
+                    </div>
+                </div>
+                <table id="entryTable">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Bill No</th>
+                            <th>Party</th>
+                            <th>Type</th>
+                            <th>Mode</th>
+                            <th>Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody id="transactionList"></tbody>
+                </table>
+            </div>
+
+            <!-- Dashboard View -->
+            <div id="dashboardView" class="view-section">
+                <h2>Dashboard</h2>
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>Today's Sales</h3>
+                        <p id="dashSalesToday">0</p>
+                    </div>
+                    <div class="card">
+                        <h3>Monthly Sales</h3>
+                        <p id="dashSalesMonth">0</p>
+                    </div>
+                    <div class="card">
+                        <h3>Cash Balance</h3>
+                        <p id="dashCash">0</p>
+                    </div>
+                    <div class="card">
+                        <h3>Bank Balance</h3>
+                        <p id="dashBank">0</p>
+                    </div>
+                    <div class="card">
+                        <h3>Receivables</h3>
+                        <p id="dashReceivables" class="text-danger">0</p>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div style="display:flex; gap: 24px; margin-bottom: 30px;">
+                    <div class="card" style="flex:2; height: 350px;">
+                        <h3>Sales Trend (Last 30 Days)</h3>
+                        <div style="height: 280px;">
+                            <canvas id="salesChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="card" style="flex:1; height: 350px;">
+                        <h3>Fund Availability (Cash vs Bank)</h3>
+                        <div style="height: 250px;">
+                            <canvas id="expenseChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Party View -->
+            <div id="partyView" class="view-section">
+                <div class="card" style="max-width: 600px;">
+                    <h2>Add New Party</h2>
+                    <label style="display:block; margin-bottom: 8px;">Party Name</label>
+                    <input type="text" id="partyName" placeholder="Enter name...">
+
+                    <label style="display:block; margin: 16px 0 8px;">Type</label>
+                    <select id="partyType">
+                        <option value="Customer">Customer</option>
+                        <option value="Credit Customer">Credit Customer</option>
+                        <option value="Supplier">Supplier</option>
+                        <option value="Expense Account">Expense Account</option>
+                        <option value="Bank">Bank Account</option>
+                    </select>
+
+                    <div style="margin: 20px 0;">
+                        <label style="display:flex; align-items:center; gap: 8px;">
+                            <input type="checkbox" id="creditAllowed" style="width: auto;"> Allow Credit?
+                        </label>
+                    </div>
+
+                    <button onclick="createParty()">Create Party</button>
+                </div>
+
+                <!-- Rename Party (Admin Only) -->
+                <div class="card" id="renamePartyCard" style="max-width: 600px; margin-top: 20px; display: none;">
+                    <h2>Rename Party (Admin)</h2>
+                    <label style="display:block; margin-bottom: 8px;">Select Party</label>
+                    <input type="text" id="renameOldName" list="partyList" placeholder="Search party to rename...">
+
+                    <label style="display:block; margin: 16px 0 8px;">New Name</label>
+                    <input type="text" id="renameNewName" placeholder="Enter new name...">
+
+                    <button onclick="renameParty()"
+                        style="margin-top: 15px; background: var(--warning); color: black;">Rename Party</button>
+                </div>
+            </div>
+
+            <!-- Ledger View -->
+            <div id="ledgerView" class="view-section">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Party Ledger</h2>
+                    <div>
+                        <button class="secondary" onclick="exportLedger()">Export Excel</button>
+                        <button class="secondary" onclick="window.print()">Print</button>
+                    </div>
+                </div>
+
+                <div class="card"
+                    style="margin-bottom: 20px; padding: 16px; display:flex; flex-wrap: wrap; gap: 16px; justify-content:space-between; align-items:center;">
+                    <div style="display:flex; gap: 10px; align-items: center;">
+                        <label>Party: </label>
+                        <select id="reportParty" class="partyDropdown" style="width: 200px;"></select>
+                    </div>
+
+                    <div style="display:flex; gap: 10px; align-items: center;">
+                        <label>From: </label>
+                        <input type="date" id="ledgerStart" style="width: 130px;">
+                        <label>To: </label>
+                        <input type="date" id="ledgerEnd" style="width: 130px;">
+                        <button onclick="loadLedgerReport()">Show</button>
+                    </div>
+
+                    <input type="text" placeholder="Search Transactions..."
+                        onkeyup="filterTable('ledgerTable', this.value)" style="width: 200px;">
+                </div>
+
+                <table id="ledgerTable">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Bill</th>
+                            <th>Type</th>
+                            <th>Mode</th>
+                            <th class="text-right">Amount</th>
+                            <th class="text-right">Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ledgerBody"></tbody>
+                </table>
+            </div>
+
+            <!-- Daily Summary View -->
+            <div id="dailySummaryView" class="view-section">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Daily Summary</h2>
+                    <div>
+                        <!-- Note: Daily Summary is div-based, not table. Creating a hidden table for export might be needed or just printing? 
+                             Actually user wants Export to Excel. SheetJS can export JSON data too. 
+                             For now let's add Print. Exporting this specific card layout is tricky without a table. 
+                             I'll skip Excel for Summary View for now or add it later if critical. 
+                             User asked for "print preview and print to excel option too" generally. 
+                             Let's prioritize Table views first. -->
+                        <button class="secondary" onclick="window.print()">Print</button>
+                    </div>
+                </div>
+                <table id="dailySummaryTable">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th class="text-right">Opening Cash</th>
+                            <th class="text-right">Cash In</th>
+                            <th class="text-right">Cash Expense</th>
+                            <th class="text-right">Cash Needed</th>
+                            <th class="text-right">Cash In Hand</th>
+                            <th class="text-right">Cash Short / Excess</th>
+                            <th class="text-right">Bank</th>
+                            <th class="text-right">Credit Sale</th>
+                            <th class="text-right">Total Sales</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dailySummaryBody"></tbody>
+                </table>
+            </div>
+
+            <!-- Short Report View -->
+            <div id="shortReportView" class="view-section">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Short / Excess Report</h2>
+                    <div>
+                        <button class="secondary" onclick="window.print()">Print</button>
+                    </div>
+                </div>
+                <table id="shortReportTable">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th class="text-right">Opening Cash</th>
+                            <th class="text-right">Cash In</th>
+                            <th class="text-right">Cash Expense</th>
+                            <th class="text-right">Cash Needed</th>
+                            <th class="text-right">Cash In Hand</th>
+                            <th class="text-right">Short / Excess</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shortReportBody"></tbody>
+                </table>
+                <div id="shortReportSummary" style="margin-top: 16px;"></div>
+            </div>
+
+            <!-- Mode Report View -->
+            <div id="modeReportView" class="view-section">
+                <h2 id="modeTitle">Cash Ledger</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Party</th>
+                            <th>Type</th>
+                            <th class="text-right">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modeReportBody"></tbody>
+                </table>
+            </div>
+
+            <!-- Expense Report View -->
+            <div id="expenseReportView" class="view-section">
+                <h2>Expense Report</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Party/Desc</th>
+                            <th>Mode</th>
+                            <th class="text-right">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody id="expenseReportBody"></tbody>
+                </table>
+            </div>
+
+            <!-- Outstanding View -->
+            <div id="outstandingView" class="view-section">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Credit Outstanding</h2>
+                    <input type="text" placeholder="Search..."
+                        onkeyup="filterTable('outstandingBody', this.value, true)" style="width: 200px;">
+                </div>
+                <div style="margin: 12px 0; padding: 16px; background: var(--card-bg); border-radius: 8px; font-size: 18px; font-weight: bold; text-align: center;">
+                    Total Outstanding: <span id="totalOutstanding" style="color: #FF6B6B;">₹0.00</span>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Party</th>
+                            <th class="text-right">Outstanding Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody id="outstandingBody"></tbody>
+                </table>
+            </div>
+
+            <!-- Trial Balance View -->
+            <div id="trialBalanceView" class="view-section">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Trial Balance</h2>
+                    <div>
+                        <button class="secondary"
+                            onclick="exportTableToExcel('trialBalanceBody', 'Trial_Balance')">Export Excel</button>
+                        <button class="secondary" onclick="window.print()">Print</button>
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Account / Party</th>
+                            <th class="text-right">Debit</th>
+                            <th class="text-right">Credit</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trialBalanceBody"></tbody>
+                </table>
+            </div>
+
+            <!-- PnL View -->
+            <div id="pnlView" class="view-section">
+                <h2>Profit & Loss</h2>
+                <div class="card">
+                    <table style="box-shadow: none;">
+                        <tr>
+                            <td>Total Sales</td>
+                            <td class="text-right" id="pnlSales">0</td>
+                        </tr>
+                        <tr>
+                            <td>Total Expenses</td>
+                            <td class="text-right" id="pnlExpenses">0</td>
+                        </tr>
+                        <tr style="font-weight: bold; font-size: 1.1em;">
+                            <td>Net Profit</td>
+                            <td class="text-right" id="pnlProfit">0</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Settings View -->
+            <div id="settingsView" class="view-section">
+                <h2>Settings</h2>
+
+                <div class="card">
+                    <h3>Preferences</h3>
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        <input type="checkbox" id="strictPartyMode" style="width: auto;" checked>
+                        Restrict Party Selection to List
+                    </label>
+                    <div style="margin-top: 10px; padding-top:10px; border-top: 1px solid var(--border);">
+                        <label style="display:flex; align-items:center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="darkModeToggle" style="width: auto;" onclick="toggleDarkMode()">
+                            Enable Dark Mode 🌙
+                        </label>
+                    </div>
+                </div>
+                <br>
+
+                <div class="card">
+                    <h3>Backup & Restore</h3>
+                    <button onclick="backupDB()">Backup Database</button>
+                    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+                        <label style="display:block; margin-bottom: 8px;">Restore from File:</label>
+                        <button class="secondary" onclick="restoreDB()">Choose Backup & Restore</button>
+                    </div>
+                </div>
+                    <div class="card">
+                        <h3>Server Mode</h3>
+                        <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 10px;">
+                            Run backend automatically on system startup (server machine).
+                        </p>
+                        <button onclick="installServerMode()">Install Server Mode</button>
+                        <button class="secondary" onclick="uninstallServerMode()" style="margin-left: 8px;">Uninstall Server Mode</button>
+                    </div>
+                <br>
+
+                <div class="card">
+                    <h3>Data Import</h3>
+                    <label style="display:block; margin-bottom: 8px;">Import Excel / CSV:</label>
+                    <div style="display:flex; gap: 10px;">
+                        <input type="file" id="importFile" accept=".csv, .xlsx" style="flex:1;">
+                        <button class="secondary" onclick="importData()">Import</button>
+                    </div>
+                </div>
+
+                <!-- Admin Panel (Hidden for non-Admins) -->
+                <div id="adminPanel"
+                    style="display:none; margin-top: 30px; border-top: 2px dashed var(--border); padding-top: 20px;">
+                    <h2 style="color: var(--primary);">Admin Panel</h2>
+
+                    <!-- Opening Cash (Seed) -->
+                    <div class="card">
+                        <h3>Opening Cash (First Day)</h3>
+                        <div style="display:flex; gap: 10px; margin-bottom: 15px; align-items:center;">
+                            <input type="number" id="openingCashSeed" placeholder="Enter opening cash" style="flex:1;">
+                            <button class="secondary" onclick="saveOpeningCashSeed()">Save</button>
+                        </div>
+                        <div style="color: var(--text-secondary); font-size: 12px;">
+                            This value is used as the opening cash for the first day.
+                        </div>
+                    </div>
+                    <br>
+
+                    <!-- User Management -->
+                    <div class="card">
+                        <h3>User Management</h3>
+                        <div style="display:flex; gap: 10px; margin-bottom: 15px;">
+                            <input type="text" id="newUsername" placeholder="Username" style="flex:1;">
+                            <input type="password" id="newPassword" placeholder="Password" style="flex:1;">
+                            <select id="newRole" style="flex:1;">
+                                <option value="accounts">Accounts Role</option>
+                                <option value="admin">Admin Role</option>
+                            </select>
+                            <button onclick="createUser()">Add User</button>
+                        </div>
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>Role</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="usersTableBody"></tbody>
+                        </table>
+                    </div>
+                    <br>
+
+                    <!-- Change Password -->
+                    <div class="card">
+                        <h3>Change Password</h3>
+                        <div style="display:flex; gap: 10px; margin-bottom: 15px;">
+                            <input type="text" id="pwdUsername" placeholder="Username" style="flex:1;">
+                            <input type="password" id="pwdNew" placeholder="New Password" style="flex:1;">
+                            <button onclick="changeUserPassword()">Update</button>
+                        </div>
+                    </div>
+                    <br>
+
+                    <!-- Audit Log -->
+                    <div class="card">
+                        <h3>Audit Log</h3>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>User</th>
+                                        <th>Action</th>
+                                        <th>Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="auditTableBody"></tbody>
+                            </table>
+                        </div>
+                        <button class="secondary" onclick="loadAuditLog()" style="margin-top:10px;">Refresh
+                            Logs</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Edit Transaction Modal -->
+    <div id="editTxnModal" class="modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:2000; justify-content:center; align-items:center;">
+        <div class="modal-content"
+            style="background:white; padding:30px; border-radius:12px; width:400px; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+            <h3 style="margin-top:0;">Edit Transaction</h3>
+            <div class="input-group" style="margin:15px 0;">
+                <label style="display:block; margin-bottom:5px;">Field to Edit</label>
+                <select id="editField" class="input-field" style="width:100%; padding:8px;">
+                    <option value="amount">Amount</option>
+                    <option value="bill_no">Bill No</option>
+                    <option value="txn_date">Date</option>
+                    <option value="payment_mode">Mode</option>
+                </select>
+            </div>
+            <div class="input-group" style="margin:15px 0;">
+                <label style="display:block; margin-bottom:5px;">New Value</label>
+                <input type="text" id="editValue" class="input-field" placeholder="Enter new value"
+                    style="width:100%; padding:8px;">
+            </div>
+            <input type="hidden" id="editTxnId">
+            <div style="display: flex; gap: 10px; margin-top: 20px; justify-content:flex-end;">
+                <button onclick="closeEditModal()"
+                    style="padding:8px 16px; border:none; background:#e5e7eb; border-radius:4px; cursor:pointer;">Cancel</button>
+                <button onclick="submitTxnEdit()"
+                    style="padding:8px 16px; border:none; background:#4f46e5; color:white; border-radius:4px; cursor:pointer;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+    <script>
+        // Simple helper for active nav state
+        function activateNav(el) {
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            el.classList.add('active');
+        }
+    </script>
+</body>
+
+</html>
