@@ -206,15 +206,9 @@ def get_master_connection():
     conn.setencoding(encoding='utf-8')
     return conn
 
-def get_default_backup_dir(cursor):
-    try:
-        cursor.execute("SELECT SERVERPROPERTY('InstanceDefaultBackupPath')")
-        row = cursor.fetchone()
-        if row and row[0]:
-            return str(row[0])
-    except Exception:
-        pass
-    return "C:\\SQLBackups"
+def get_default_backup_dir(cursor=None):
+    # Always use C:\Finlogs for simplicity and consistency
+    return "C:\\Finlogs"
 
 def escape_sql_path(path: str) -> str:
     return path.replace("'", "''")
@@ -766,9 +760,9 @@ def backup_database(path: str = None):
         database = SQL_DATABASE
         conn = get_master_connection()
         cursor = conn.cursor()
-        backup_dir = get_backup_target_dir().strip()
-        if not backup_dir:
-            backup_dir = get_default_backup_dir(cursor)
+        
+        # Always use C:\Finlogs for backups
+        backup_dir = "C:\\Finlogs"
         os.makedirs(backup_dir, exist_ok=True)
         server_backup_path = os.path.join(backup_dir, f"{database}_{timestamp}.bak")
         # SQL Server BACKUP command
@@ -802,8 +796,9 @@ def backup_database_auto():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         conn = get_master_connection()
         cursor = conn.cursor()
-        base_dir = get_backup_target_dir().strip() or get_default_backup_dir(cursor)
-        backup_dir = os.path.join(base_dir, "Auto")
+        
+        # Auto backups go to C:\Finlogs\Auto
+        backup_dir = "C:\\Finlogs\\Auto"
         os.makedirs(backup_dir, exist_ok=True)
         
         database = SQL_DATABASE

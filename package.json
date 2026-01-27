@@ -1,18 +1,19 @@
 {
-  "name": "munna-agencies",
-  "productName": "Munna Agencies",
+  "name": "m-finlogs",
+  "productName": "M-Finlogs",
   "version": "1.0.0",
-  "description": "Accounting Software for Munna Agencies",
+  "description": "Accounting Software for M-Finlogs",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder"
   },
   "build": {
-    "appId": "com.munna.agencies",
-    "productName": "Munna Agencies",
+    "appId": "com.mfinlogs.app",
+    "productName": "M-Finlogs",
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/finlogs.ico"
     },
     "extraResources": [
       {
@@ -22,7 +23,7 @@
     ]
   },
   "keywords": [],
-  "author": "",
+  "author": "Ekthar",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {

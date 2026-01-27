@@ -17,10 +17,10 @@
 Open SQL Server Management Studio or use sqlcmd and run:
 
 ```sql
-CREATE DATABASE finlogs;
+CREATE DATABASE m_finlogs;
 GO
 
-USE finlogs;
+USE m_finlogs;
 GO
 ```
 
@@ -30,7 +30,7 @@ Edit `config.py` file with your SQL Server details:
 
 ```python
 SQL_SERVER = "localhost"  # or your server name/IP (e.g., "localhost\\SQLEXPRESS")
-SQL_DATABASE = "finlogs"
+SQL_DATABASE = "m_finlogs"
 SQL_USERNAME = "sa"  # or your SQL Server username
 SQL_PASSWORD = "YourStrongPassword123!"  # your SQL Server password
 SQL_DRIVER = "{ODBC Driver 17 for SQL Server}"
@@ -78,17 +78,17 @@ If using SQL Authentication, ensure SQL Server is configured for mixed mode:
 
 ```sql
 -- Create login
-CREATE LOGIN finlogs_user WITH PASSWORD = 'YourStrongPassword123!';
+CREATE LOGIN m_finlogs_user WITH PASSWORD = 'YourStrongPassword123!';
 GO
 
 -- Create user in database
-USE finlogs;
+USE m_finlogs;
 GO
-CREATE USER finlogs_user FOR LOGIN finlogs_user;
+CREATE USER m_finlogs_user FOR LOGIN m_finlogs_user;
 GO
 
 -- Grant permissions
-ALTER ROLE db_owner ADD MEMBER finlogs_user;
+ALTER ROLE db_owner ADD MEMBER m_finlogs_user;
 GO
 ```
 
@@ -149,7 +149,7 @@ except Exception as e:
 - Verify user has permissions on the database
 
 ### Error: "Cannot open database"
-- Ensure the database exists (CREATE DATABASE finlogs)
+- Ensure the database exists (CREATE DATABASE m_finlogs)
 - Check database name in config.py matches
 
 ### Connection Timeout

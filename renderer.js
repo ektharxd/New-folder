@@ -180,7 +180,7 @@ async function loadTransactions(page = 1) {
             if (currentRole === 'admin') {
                 actionCell = `<td style="display:flex; gap:5px;">
                     <button class="btn-sm" onclick="openEditModal('${txn.id}')" style="background:#4b5563; padding: 4px 8px; font-size: 12px; color:white; border:none; border-radius:4px; cursor:pointer;">Edit</button>
-                    <button class="btn-sm" onclick="deleteTransaction('${txn.id}')" style="background:#dc2626; padding: 4px 8px; font-size: 12px; color:white; border:none; border-radius:4px; cursor:pointer;">Del</button>
+                    <button class="btn-sm" onclick="if(!window.isDeleting) deleteTransaction('${txn.id}')" style="background:#dc2626; padding: 4px 8px; font-size: 12px; color:white; border:none; border-radius:4px; cursor:pointer;">Del</button>
                 </td>`;
             }
 
@@ -217,6 +217,16 @@ async function loadTransactions(page = 1) {
         if (currentPageDisplay) currentPageDisplay.textContent = `Page ${currentTxnPage} of ${totalTxnPages}`;
         if (prevBtn) prevBtn.disabled = currentTxnPage <= 1;
         if (nextBtn) nextBtn.disabled = currentTxnPage >= totalTxnPages;
+        
+        // Force ensure app is interactive after loading - AGGRESSIVE
+        const appContent = document.getElementById('appContent');
+        if (appContent) {
+            appContent.style.setProperty('pointer-events', 'auto', 'important');
+            appContent.style.setProperty('filter', 'none', 'important');
+            appContent.style.setProperty('opacity', '1', 'important');
+            // Force immediate reflow
+            void appContent.offsetHeight;
+        }
     } catch (e) {
         console.timeEnd('loadTransactions-total');
         showToast("Error loading transactions: " + e, "error");
@@ -388,6 +398,13 @@ async function createParty() {
 function showView(viewId) {
     document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
     document.getElementById(viewId).classList.add('active');
+    
+    // Load data when switching to specific views
+    if (viewId === 'entryView') {
+        loadTransactions();
+    } else if (viewId === 'ledgerView') {
+        loadLedgerReport();
+    }
 }
 
 // Reports
@@ -457,6 +474,7 @@ function openEditModal(id) {
     modal.style.display = 'flex';
     modal.style.pointerEvents = 'auto';
     modal.style.visibility = 'visible';
+    modal.style.zIndex = '2000';
     
     document.getElementById('editTxnId').value = id;
     document.getElementById('editValue').value = '';
@@ -472,18 +490,31 @@ function closeEditModal() {
     if (!modal) return;
     
     // Completely remove modal from layout and paint
-    modal.style.display = 'none';
-    modal.style.pointerEvents = 'none';
-    modal.style.visibility = 'hidden';
+    modal.style.setProperty('display', 'none', 'important');
+    modal.style.setProperty('pointer-events', 'none', 'important');
+    modal.style.setProperty('visibility', 'hidden', 'important');
+    modal.style.setProperty('z-index', '-1', 'important');
     
     // Force browser to recalculate layout immediately
     void modal.offsetHeight;
+    
+    // Also ensure app is unlocked
+    const appContent = document.getElementById('appContent');
+    if (appContent) {
+        appContent.style.setProperty('pointer-events', 'auto', 'important');
+        appContent.style.setProperty('filter', 'none', 'important');
+        appContent.style.setProperty('opacity', '1', 'important');
+        void appContent.offsetHeight;
+    }
+    
+    console.log('closeEditModal: Modal fully closed');
 }
 
 function ensureAppInteractive() {
     const appContent = document.getElementById('appContent');
     const loginModal = document.getElementById('loginModal');
     const editModal = document.getElementById('editTxnModal');
+    const confirmModal = document.getElementById('confirmDeleteModal');
     const dbModal = document.getElementById('dbConfigModal');
 
     if (sessionStorage.getItem('username')) {
@@ -492,8 +523,9 @@ function ensureAppInteractive() {
             loginModal.style.pointerEvents = 'none';
         }
         if (appContent) {
-            appContent.style.filter = 'none';
-            appContent.style.pointerEvents = 'auto';
+            appContent.style.setProperty('filter', 'none', 'important');
+            appContent.style.setProperty('pointer-events', 'auto', 'important');
+            appContent.style.setProperty('opacity', '1', 'important');
             // Force reflow
             void appContent.offsetHeight;
         }
@@ -506,10 +538,27 @@ function ensureAppInteractive() {
         editModal.style.visibility = 'hidden';
         void editModal.offsetHeight;
     }
+    if (confirmModal) {
+        confirmModal.style.display = 'none';
+        confirmModal.style.pointerEvents = 'none';
+    }
     if (dbModal) {
         dbModal.style.display = 'none';
         dbModal.style.pointerEvents = 'none';
     }
+    
+    // CRITICAL: Reset all input fields to ensure they're interactive
+    const inputFields = ['newDate', 'newBill', 'newParty', 'newType', 'newMode', 'newAmount', 'newRemarks'];
+    inputFields.forEach(id => {
+        const input = document.getElementById(id);
+        if (input) {
+            input.disabled = false;
+            input.readOnly = false;
+            input.style.pointerEvents = 'auto';
+            input.style.opacity = '1';
+            input.style.filter = 'none';
+        }
+    });
 }
 
 async function submitTxnEdit() {
@@ -551,16 +600,54 @@ async function submitTxnEdit() {
     }
 }
 
-async function deleteTransaction(id) {
-    // Close modal BEFORE showing confirm to avoid focus issues
-    closeEditModal();
+let isDeleting = false;
+let pendingDeleteId = null;
+
+function showConfirmDelete(id) {
+    const modal = document.getElementById('confirmDeleteModal');
+    const okBtn = document.getElementById('confirmOkBtn');
+    const cancelBtn = document.getElementById('confirmCancelBtn');
     
-    if (!confirm("Are you sure you want to permanently DELETE this transaction?")) {
-        // User cancelled - reopen modal
+    pendingDeleteId = id;
+    modal.style.display = 'flex';
+    modal.style.pointerEvents = 'auto';
+    modal.style.visibility = 'visible';
+    modal.style.zIndex = '3000';
+    
+    // Remove any existing listeners
+    const newOkBtn = okBtn.cloneNode(true);
+    const newCancelBtn = cancelBtn.cloneNode(true);
+    okBtn.parentNode.replaceChild(newOkBtn, okBtn);
+    cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+    
+    // Add new listeners
+    document.getElementById('confirmOkBtn').onclick = () => {
+        modal.style.display = 'none';
+        performDelete(pendingDeleteId);
+    };
+    
+    document.getElementById('confirmCancelBtn').onclick = () => {
+        modal.style.display = 'none';
+        pendingDeleteId = null;
         openEditModal(id);
+    };
+}
+
+async function deleteTransaction(id) {
+    // Prevent concurrent deletes
+    if (isDeleting) {
+        console.log('Delete already in progress, ignoring...');
         return;
     }
+    
+    // Close edit modal and show confirmation
+    closeEditModal();
+    showConfirmDelete(id);
+}
 
+async function performDelete(id) {
+    isDeleting = true;
+    
     try {
         const res = await fetch("http://127.0.0.1:8000/transaction/delete", {
             method: "POST",
@@ -574,24 +661,111 @@ async function deleteTransaction(id) {
         const data = await res.json();
         if (data.status === "Deleted Successfully") {
             showToast("Transaction Deleted", "success");
-            ensureAppInteractive();
             
-            // Small delay to let DOM settle before reload
+            // Reload data
+            if (isViewActive('ledgerView')) loadLedgerReport();
+            await loadTransactions();
+            updateDashboard();
+            unlockUiAfterModal();
+            
+            // CRITICAL: Completely reset input interactivity
             setTimeout(() => {
-                // Failsafe: ensure modal is definitely closed
-                closeEditModal();
-                ensureAppInteractive();
-                
-                if (isViewActive('ledgerView')) loadLedgerReport();
-                loadTransactions();
-                updateDashboard();
-            }, 50);
+                reactivateInputs();
+                isDeleting = false;
+            }, 100);
         } else {
             showToast("Delete Failed: " + data.detail, "error");
+            isDeleting = false;
         }
     } catch (e) {
         showToast("Error: " + e, "error");
+        isDeleting = false;
     }
+}
+
+function unlockUiAfterModal() {
+    const appContent = document.getElementById('appContent');
+    const loginModal = document.getElementById('loginModal');
+    const editModal = document.getElementById('editTxnModal');
+    const confirmModal = document.getElementById('confirmDeleteModal');
+    const dbModal = document.getElementById('dbConfigModal');
+
+    const rootEl = document.documentElement;
+    const bodyEl = document.body;
+
+    [rootEl, bodyEl, appContent].forEach(el => {
+        if (!el) return;
+        el.style.pointerEvents = 'auto';
+        el.style.filter = 'none';
+        el.style.opacity = '1';
+    });
+
+    [loginModal, editModal, confirmModal, dbModal].forEach(modal => {
+        if (!modal) return;
+        modal.style.display = 'none';
+        modal.style.pointerEvents = 'none';
+        modal.style.visibility = 'hidden';
+        modal.style.zIndex = '-1';
+    });
+
+    if (document.activeElement && document.activeElement !== document.body) {
+        document.activeElement.blur();
+    }
+}
+
+function reactivateInputs() {
+    console.log('Reactivating inputs...');
+    unlockUiAfterModal();
+    
+    // 1. Force parent container reset
+    const cardContainer = document.querySelector('#entryView .card');
+    if (cardContainer) {
+        const originalDisplay = cardContainer.style.display;
+        cardContainer.style.display = 'none';
+        void cardContainer.offsetHeight;
+        cardContainer.style.display = originalDisplay || '';
+    }
+    
+    // 2. Reset all input fields completely
+    const inputFields = ['newDate', 'newBill', 'newParty', 'newType', 'newMode', 'newAmount'];
+    inputFields.forEach(id => {
+        const input = document.getElementById(id);
+        if (input) {
+            // Clear all potentially blocking properties
+            input.disabled = false;
+            input.readOnly = false;
+            input.removeAttribute('disabled');
+            input.removeAttribute('readonly');
+            input.style.cssText = '';
+            
+            // Force visual reset
+            input.style.pointerEvents = 'auto';
+            input.style.opacity = '1';
+            input.style.cursor = 'text';
+            
+            // Trigger browser re-registration
+            input.blur();
+            input.dispatchEvent(new Event('change'));
+        }
+    });
+    
+    // 3. Ensure app container is interactive
+    const appContent = document.getElementById('appContent');
+    if (appContent) {
+        appContent.style.setProperty('pointer-events', 'auto', 'important');
+        appContent.style.setProperty('filter', 'none', 'important');
+        appContent.style.setProperty('opacity', '1', 'important');
+        void appContent.offsetHeight;
+    }
+    
+    // 4. Focus first input to verify it works
+    setTimeout(() => {
+        const firstInput = document.getElementById('newBill');
+        if (firstInput) {
+            firstInput.focus();
+            console.log('Input reactivation complete, focused:', document.activeElement.id);
+        }
+    }, 50);
 }
 
 // Charts Logic
@@ -794,15 +968,23 @@ window.onload = function () {
     setInterval(() => {
         if (sessionStorage.getItem('username')) {
             const editModal = document.getElementById('editTxnModal');
+            const confirmModal = document.getElementById('confirmDeleteModal');
             const appContent = document.getElementById('appContent');
             
-            // If modal is not shown but somehow blocking
+            // If modals are not shown but somehow blocking
             if (editModal) {
                 const computedDisplay = window.getComputedStyle(editModal).display;
                 if (computedDisplay !== 'flex' && computedDisplay !== 'block') {
-                    // Modal should be hidden - ensure it's not blocking
                     editModal.style.pointerEvents = 'none';
                     editModal.style.visibility = 'hidden';
+                }
+            }
+            
+            if (confirmModal) {
+                const computedDisplay = window.getComputedStyle(confirmModal).display;
+                if (computedDisplay !== 'flex' && computedDisplay !== 'block') {
+                    confirmModal.style.pointerEvents = 'none';
+                    confirmModal.style.visibility = 'hidden';
                 }
             }
             
@@ -1378,7 +1560,7 @@ async function handleLogin() {
         sessionStorage.setItem('company', company);
 
         checkAuth();
-        showToast("Welcome " + data.username, "success");
+        showToast("Hey" + data.username, "success");
 
         loadParties();
         showDashboard();
@@ -1424,10 +1606,13 @@ async function handleLogin() {
         sessionStorage.setItem('company', company);
 
         checkAuth();
-        showToast("Welcome " + data.username, "success");
+        showToast("Hey " + data.username, "success");
 
         // Load initial data
         loadParties();
+        
+        // Load transactions AND show dashboard
+        loadTransactions();
         showDashboard();
 
     } catch (e) {
@@ -1649,7 +1834,7 @@ async function loadDbConfig() {
         // Load defaults when backend is not running
         const localCfg = await loadClientConfig();
         document.getElementById('cfgServer').value = 'localhost';
-        document.getElementById('cfgDatabase').value = 'Munna_Accounts';
+        document.getElementById('cfgDatabase').value = 'M_Finlogs_Accounts';
         document.getElementById('cfgAuthType').value = 'windows';
         document.getElementById('cfgBackupDir').value = '';
         document.getElementById('cfgApiBase').value = localCfg.api_base || apiBase;

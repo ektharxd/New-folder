@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
+const net = require('net');
 
 let mainWindow;
 let splashWindow;
@@ -25,10 +26,10 @@ function createMainWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
-        title: "Finlogs",
+        title: "M-Finlogs",
         autoHideMenuBar: true,
         show: false,
-        icon: path.join(__dirname, 'assets', 'finlogs.svg'),
+        icon: path.join(__dirname, 'assets', 'finlogs.ico'),
         roundedCorners: true,
         titleBarStyle: 'hidden',
         titleBarOverlay: true,
@@ -40,7 +41,6 @@ function createMainWindow() {
     mainWindow.loadFile('index.html');
 
     
-    mainWindow.webContents.openDevTools();
 
     mainWindow.once('ready-to-show', () => {
         setTimeout(() => {
@@ -50,11 +50,26 @@ function createMainWindow() {
     });
 }
 
-function startBackend() {
+function isPortFree(port, host = '127.0.0.1') {
+    return new Promise((resolve) => {
+        const tester = net.createServer()
+            .once('error', () => resolve(false))
+            .once('listening', () => tester.once('close', () => resolve(true)).close())
+            .listen(port, host);
+    });
+}
+
+async function startBackend() {
     // Start backend in both dev and production mode
     const { spawn } = require('child_process');
     
     const envVars = { ...process.env, FINLOGS_CONFIG_DIR: app.getPath('userData') };
+
+    const portFree = await isPortFree(8000, '127.0.0.1');
+    if (!portFree) {
+        console.warn('Backend not started: port 8000 already in use.');
+        return;
+    }
 
     if (app.isPackaged) {
         // Production: use compiled backend.exe
@@ -75,7 +90,7 @@ function startBackend() {
             '--port', '8000'
         ], {
             cwd: __dirname,
-            shell: true,
+            shell: false,
             env: envVars
         });
         
@@ -96,13 +111,27 @@ function killBackend() {
     }
 }
 
-app.whenReady().then(() => {
-    startBackend(); // Start Python Server
+app.whenReady().then(async () => {
+    await startBackend(); // Start Python Server
     createSplashWindow();
     createMainWindow();
+
+    globalShortcut.register('Alt+E', () => {
+        if (!mainWindow) return;
+        if (mainWindow.webContents.isDevToolsOpened()) {
+            mainWindow.webContents.closeDevTools();
+        } else {
+            mainWindow.webContents.openDevTools({ mode: 'detach' });
+        }
+    });
+}).catch((err) => {
+    console.error('App startup error:', err);
 });
 
-app.on('will-quit', killBackend);
+app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+    killBackend();
+});
 
 app.on('window-all-closed', () => {
     killBackend();
@@ -152,18 +181,37 @@ ipcMain.handle('app:getUserDataPath', async () => {
 
 ipcMain.handle('server:install', async () => {
     try {
-        const taskName = 'FinlogsServer';
-        const backendPath = app.isPackaged
-            ? path.join(process.resourcesPath, 'backend.exe')
-            : path.join(__dirname, 'backend.py');
-
-        const command = app.isPackaged
-            ? `cmd /c "set FINLOGS_HOST=0.0.0.0& set FINLOGS_PORT=8000& \"${backendPath}\""`
-            : `cmd /c "cd /d \"${__dirname}\" & set FINLOGS_HOST=0.0.0.0& set FINLOGS_PORT=8000& python -m uvicorn backend:app --host 0.0.0.0 --port 8000"`;
-
+        const taskName = 'M-FinlogsServer';
+        const fs = require('fs');
+        const userDataPath = app.getPath('userData');
+        
+        // Create a startup script instead of inline command
+        const scriptPath = path.join(userDataPath, 'start_server.bat');
+        
+        let scriptContent;
+        if (app.isPackaged) {
+            const backendPath = path.join(process.resourcesPath, 'backend.exe');
+            scriptContent = `@echo off
+set FINLOGS_CONFIG_DIR=${userDataPath}
+set FINLOGS_HOST=0.0.0.0
+set FINLOGS_PORT=8000
+"${backendPath}"`;
+        } else {
+            scriptContent = `@echo off
+cd /d "${__dirname}"
+set FINLOGS_CONFIG_DIR=${userDataPath}
+set FINLOGS_HOST=0.0.0.0
+set FINLOGS_PORT=8000
+python -m uvicorn backend:app --host 0.0.0.0 --port 8000`;
+        }
+        
+        // Write the script file
+        fs.writeFileSync(scriptPath, scriptContent, 'utf8');
+        
         const { exec } = require('child_process');
         return await new Promise((resolve) => {
-            exec(`schtasks /Create /F /SC ONSTART /RL HIGHEST /TN "${taskName}" /TR "${command}"`, (err, stdout, stderr) => {
+            // Create scheduled task that runs the script
+            exec(`schtasks /Create /F /SC ONSTART /RL HIGHEST /TN "${taskName}" /TR "\\"${scriptPath}\\""`, (err, stdout, stderr) => {
                 if (err) return resolve({ success: false, error: stderr || err.message });
                 resolve({ success: true });
             });
@@ -176,8 +224,21 @@ ipcMain.handle('server:install', async () => {
 ipcMain.handle('server:uninstall', async () => {
     try {
         const { exec } = require('child_process');
+        const fs = require('fs');
+        const userDataPath = app.getPath('userData');
+        const scriptPath = path.join(userDataPath, 'start_server.bat');
+        
         return await new Promise((resolve) => {
-            exec(`schtasks /Delete /F /TN "FinlogsServer"`, (err, stdout, stderr) => {
+            exec(`schtasks /Delete /F /TN "M-FinlogsServer"`, (err, stdout, stderr) => {
+                // Try to delete the script file (ignore errors if it doesn't exist)
+                try {
+                    if (fs.existsSync(scriptPath)) {
+                        fs.unlinkSync(scriptPath);
+                    }
+                } catch (e) {
+                    console.error('Could not delete script file:', e);
+                }
+                
                 if (err) return resolve({ success: false, error: stderr || err.message });
                 resolve({ success: true });
             });

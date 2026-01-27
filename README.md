@@ -1,4 +1,4 @@
-# finlogs
+# M-Finlogs
 To make it flawless:
 
 Run backend on server 24/7
@@ -49,7 +49,7 @@ Backend can run headless on startup
 How it works:
 
 On server machine, click Install Server Mode in Settings.
-It registers a task named FinlogsServer.
+It registers a task named M-FinlogsServer.
 Backend starts at boot on 0.0.0.0:8000.
 Notes:
 

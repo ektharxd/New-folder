@@ -5,11 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://unpkg.com; connect-src 'self' http: https: https://unpkg.com https://cdn.jsdelivr.net;">
-    <title>Finlogs</title>
+    <title>M-Finlogs</title>
     <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/svg+xml" href="assets/finlogs.svg">
+    <link rel="icon" type="image/x-icon" href="assets/finlogs.ico">
     <link rel="stylesheet" href="index.css">
     <!-- Ionicons for Icons -->
     <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
@@ -25,7 +26,7 @@
     <!-- Simple Login Screen -->
     <div id="loginModal" class="login-background" style="display: flex;">
         <div class="login-glass-card">
-            <h2 class="login-title">Finlogs</h2>
+            <h2 class="login-title">M-Finlogs</h2>
             <p class="login-subtitle">Sign in to your account</p>
 
             <div class="input-group">
@@ -78,7 +79,7 @@
 
             <div class="input-group">
                 <label>Database Name</label>
-                <input type="text" id="cfgDatabase" class="login-input" placeholder="e.g., Munna_Accounts">
+                <input type="text" id="cfgDatabase" class="login-input" placeholder="e.g., M_Finlogs_Accounts">
             </div>
 
             <div class="input-group">
@@ -102,7 +103,7 @@
 
             <div class="input-group">
                 <label>Backup Target Folder (UNC share)</label>
-                <input type="text" id="cfgBackupDir" class="login-input" placeholder="\\\\LAPTOP\\FinlogsBackups">
+                <input type="text" id="cfgBackupDir" class="login-input" placeholder="\\\\LAPTOP\\M-FinlogsBackups">
                 <small style="color: var(--text-secondary); font-size: 11px;">SQL Server must have write access to this shared folder.</small>
             </div>
 
@@ -115,12 +116,12 @@
         </div>
     </div>
 
-    <div class="app-container" id="appContent" style="filter: blur(5px); pointer-events: none;">
+    <div class="app-container" id="appContent">
         <!-- Sidebar -->
         <div class="sidebar">
             <div class="brand">
                 <ion-icon name="stats-chart" style="color: var(--accent);"></ion-icon>
-                Finlogs
+                M-Finlogs
             </div>
 
             <a class="nav-item active" onclick="showView('entryView'); activateNav(this)">
@@ -154,7 +155,7 @@
             </a>
 
             <div class="nav-group-title">Management</div>
-            <a class="nav-item" onclick="showView('partyView'); activateNav(this)">
+            <a class="nav-item" onclick="showView('partyView'); activateNav(this)"> 
                 <ion-icon name="people-outline"></ion-icon> Add Party
             </a>
             <a class="nav-item" onclick="showView('settingsView'); activateNav(this)">
@@ -162,6 +163,12 @@
             </a>
 
             <div style="flex:1;"></div>
+            <div style="margin: 6px 12px 14px; padding: 8px 10px; border-radius: 10px; background: linear-gradient(135deg, rgba(79,70,229,0.18), rgba(16,185,129,0.18)); border: 1px solid rgba(79,70,229,0.25); display:flex; align-items:center; gap:8px;">
+                <ion-icon name="sparkles-outline" style="font-size:16px; color:#f50606;"></ion-icon>
+                <div style="font-size: 12px; color: var(--text-secondary);">
+                    Developed by <span style="color:#000000; font-weight:600; letter-spacing:0.3px;">EKTHAR</span>
+                </div>
+            </div>
             <a class="nav-item" onclick="handleLogout()" style="color: var(--danger);">
                 <ion-icon name="log-out-outline"></ion-icon> Logout
             </a>
@@ -510,6 +517,17 @@
                 <h2>Settings</h2>
 
                 <div class="card">
+                    <h3>About</h3>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <ion-icon name="sparkles-outline" style="font-size:18px; color:#4f46e5;"></ion-icon>
+                        <div style="font-size:14px; color: var(--text-secondary);">
+                            Developed by <span style="color:#111827; font-weight:600; letter-spacing:0.3px;">Ekthar</span>
+                        </div>
+                    </div>
+                </div>
+                <br>
+
+                <div class="card">
                     <h3>Preferences</h3>
                     <label style="display:flex; align-items:center; gap: 8px;">
                         <input type="checkbox" id="strictPartyMode" style="width: auto;" checked>
@@ -653,9 +671,25 @@
             <input type="hidden" id="editTxnId">
             <div style="display: flex; gap: 10px; margin-top: 20px; justify-content:flex-end;">
                 <button onclick="closeEditModal()"
-                    style="padding:8px 16px; border:none; background:#e5e7eb; border-radius:4px; cursor:pointer;">Cancel</button>
+                    style="padding:8px 16px; border:none; background:#e45a1a; border-radius:4px; cursor:pointer;">Cancel</button>
                 <button onclick="submitTxnEdit()"
                     style="padding:8px 16px; border:none; background:#4f46e5; color:white; border-radius:4px; cursor:pointer;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Confirmation Modal -->
+    <div id="confirmDeleteModal" class="modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:3000; justify-content:center; align-items:center;">
+        <div class="modal-content"
+            style="background:white; padding:30px; border-radius:12px; width:400px; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+            <h3 id="confirmModalTitle" style="margin-top:0; font-size:18px; color:#1f2937;">M-Finlogs</h3>
+            <p id="confirmModalMessage" style="margin:20px 0; color:#4b5563; font-size:15px;">Are you sure you want to permanently DELETE this transaction?</p>
+            <div style="display: flex; gap: 12px; margin-top: 24px; justify-content:flex-end;">
+                <button id="confirmCancelBtn"
+                    style="padding:10px 24px; border:1px solid #0b65ec; background:white; border-radius:6px; cursor:pointer; font-weight:500; color:#374151;">Cancel</button>
+                <button id="confirmOkBtn"
+                    style="padding:10px 24px; border:none; background:#dc2626; color:white; border-radius:6px; cursor:pointer; font-weight:500;">OK</button>
             </div>
         </div>
     </div>
