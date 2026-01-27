@@ -188,26 +188,26 @@
                 </div>
                 <div class="card" style="margin: 12px 0; padding: 12px;">
                     <div style="display:grid; grid-template-columns: 140px 160px 1fr 140px 140px 160px; gap: 10px; align-items:center;">
-                        <input type="date" id="newDate">
-                        <input type="text" id="newBill" placeholder="Ref/Bill">
-                        <input type="text" id="newParty" list="partyList" placeholder="Select Party">
-                        <select id="newType">
+                        <input type="date" id="newDate" onkeydown="handleEntryNavigation(event, 'newBill')">
+                        <input type="text" id="newBill" placeholder="Ref/Bill" onkeydown="handleEntryNavigation(event, 'newParty')">
+                        <input type="text" id="newParty" list="partyList" placeholder="Select Party" onkeydown="handleEntryNavigation(event, 'newType')">
+                        <select id="newType" onkeydown="handleEntryNavigation(event, 'newMode')">
                             <option>Sale</option>
                             <option>Sale Return</option>
                             <option>Expense</option>
                             <option>Receipt</option>
                         </select>
-                        <select id="newMode">
+                        <select id="newMode" onkeydown="handleEntryNavigation(event, 'newAmount')">
                             <option>Credit</option>
                             <option>Cash</option>
                             <option>UPI</option>
                             <option>Bank</option>
                         </select>
-                        <input type="number" id="newAmount" placeholder="0.00" onkeydown="checkEnter(event)">
+                        <input type="number" id="newAmount" placeholder="0.00" onkeydown="handleEntryNavigation(event, 'save')">
                     </div>
                     <datalist id="partyList"></datalist>
                     <div style="margin-top: 8px; text-align: right; color: var(--text-secondary); font-size: 13px;">
-                        Press <b>Enter</b> in Amount to Save automatically.
+                        Press <b>Enter</b> to navigate fields. Press <b>Enter</b> in Amount to Save.
                     </div>
                 </div>
                 <table id="entryTable">

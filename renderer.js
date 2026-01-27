@@ -186,7 +186,7 @@ async function loadTransactions(page = 1) {
 
             rowsHTML += `
             <tr>
-                <td>${txn.date}</td>
+                <td>${formatDateShort(txn.date)}</td>
                 <td>${txn.bill_no || ''}</td>
                 <td>${txn.party}</td>
                 <td>${txn.type}</td>
@@ -223,6 +223,31 @@ async function loadTransactions(page = 1) {
     } finally {
         isLoadingTransactions = false;
     }
+}
+
+function incrementBillNumber(billNo) {
+    if (!billNo || billNo.trim() === "") return "";
+    
+    // Match pattern: prefix (letters/symbols) + number
+    // Examples: L-145, INV-99, BILL123, A1, 145
+    const match = billNo.match(/^(.*?)(\d+)$/);
+    
+    if (!match) {
+        // No number found, return as is
+        return billNo;
+    }
+    
+    const prefix = match[1]; // Everything before the number (e.g., "L-", "INV-", "BILL", "A")
+    const numberPart = match[2]; // The numeric part (e.g., "145", "99")
+    const numberLength = numberPart.length; // Preserve leading zeros
+    
+    // Increment the number
+    const incremented = (parseInt(numberPart, 10) + 1).toString();
+    
+    // Pad with zeros if original had leading zeros
+    const paddedNumber = incremented.padStart(numberLength, '0');
+    
+    return prefix + paddedNumber;
 }
 
 async function saveEntry() {
@@ -298,11 +323,16 @@ async function saveEntry() {
             console.time('saveEntry-reload');
             await loadTransactions();
             console.timeEnd('saveEntry-reload');
+            
+            // Auto-increment bill number
+            const currentBill = bill;
+            const nextBill = incrementBillNumber(currentBill);
+            
             // Clear inputs
-            document.getElementById("newBill").value = "";
+            document.getElementById("newBill").value = nextBill;
             document.getElementById("newParty").value = "";
             document.getElementById("newAmount").value = "";
-            document.getElementById("newParty").focus();
+            document.getElementById("newBill").focus();
         } else {
             showToast("Error: " + JSON.stringify(data), "error");
         }
@@ -311,9 +341,24 @@ async function saveEntry() {
     }
 }
 
-function checkEnter(event) {
+function handleEntryNavigation(event, nextFieldIdOrAction) {
     if (event.key === "Enter") {
-        saveEntry();
+        event.preventDefault();
+        
+        if (nextFieldIdOrAction === 'save') {
+            // Save and focus will be handled by saveEntry
+            saveEntry();
+        } else {
+            // Navigate to next field
+            const nextField = document.getElementById(nextFieldIdOrAction);
+            if (nextField) {
+                nextField.focus();
+                // If it's a select, open the dropdown
+                if (nextField.tagName === 'SELECT') {
+                    nextField.click();
+                }
+            }
+        }
     }
 }
 
@@ -393,7 +438,7 @@ async function loadLedgerReport() {
 
         tbody.innerHTML += `
         <tr>
-            <td>${row.date}</td>
+            <td>${formatDateShort(row.date)}</td>
             <td>${row.bill_no || ''}</td>
             <td>${row.type}</td>
             <td>${row.mode}</td>
@@ -713,8 +758,8 @@ function formatDateShort(dateStr) {
     if (Number.isNaN(d.getTime())) return dateStr;
     const dd = String(d.getDate()).padStart(2, '0');
     const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(-2);
-    return `${dd}.${mm}.${yy}`;
+    const yyyy = String(d.getFullYear());
+    return `${dd}-${mm}-${yyyy}`;
 }
 
 // Dark Mode
@@ -733,7 +778,11 @@ function toggleDarkMode() {
 window.onload = function () {
     initApiBase().then(() => {
         checkAuth();
-        loadTransactions();
+        // Load essential data after auth check
+        if (sessionStorage.getItem('username')) {
+            loadParties();
+            loadTransactions();
+        }
     });
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark') {
@@ -938,7 +987,7 @@ async function showModeReport(mode) {
     const tbody = document.getElementById("modeReportBody");
     tbody.innerHTML = "";
     data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${row.date}</td><td>${row.party}</td><td>${row.type}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.type}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
     });
 }
 
@@ -949,7 +998,7 @@ async function showExpenseReport() {
     const tbody = document.getElementById("expenseReportBody");
     tbody.innerHTML = "";
     data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${row.date}</td><td>${row.party}</td><td>${row.mode}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.mode}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
     });
 }
 
@@ -1228,8 +1277,10 @@ function checkAuth() {
     }
 
     startAutoBackup();
-
     updatePermissions();
+    
+    // Load essential data when already authenticated
+    loadParties();
 }
 
 function startAutoBackup() {
