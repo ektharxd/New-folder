@@ -181,6 +181,7 @@ ipcMain.handle('app:getUserDataPath', async () => {
     return app.getPath('userData');
 });
 
+
 ipcMain.handle('server:restart', async () => {
     try {
         killBackend();
