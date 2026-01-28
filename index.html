@@ -239,7 +239,8 @@
             </div>
 
             <!-- Dashboard View -->
-            <div id="dashboardView" class="view-section">
+            <div id="dashboardView" class="view-section hud-grid">
+                <div class="hud-frame"></div>
                 <h2>Dashboard</h2>
                 <div class="dashboard-grid">
                     <div class="card">
@@ -261,6 +262,32 @@
                     <div class="card">
                         <h3>Receivables</h3>
                         <p id="dashReceivables" class="text-danger">0</p>
+                    </div>
+                    <div class="card system-status-card">
+                        <h3>System Status</h3>
+                        <div class="status-row">
+                            <span>Backend</span>
+                            <span id="statusBackend" class="status-pill status-offline">Offline</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Last Backup</span>
+                            <span id="statusBackup">Never</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Uptime</span>
+                            <span id="statusUptime">—</span>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3>Quick Insights</h3>
+                        <div style="display:flex; justify-content:space-between; margin-top: 6px;">
+                            <span style="color: var(--text-secondary); font-size: 12px;">Total Funds</span>
+                            <strong id="dashTotalFunds">0</strong>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-top: 6px;">
+                            <span style="color: var(--text-secondary); font-size: 12px;">Cash Ratio</span>
+                            <strong id="dashCashRatio">0%</strong>
+                        </div>
                     </div>
                 </div>
 
@@ -334,7 +361,7 @@
                     style="margin-bottom: 20px; padding: 16px; display:flex; flex-wrap: wrap; gap: 16px; justify-content:space-between; align-items:center;">
                     <div style="display:flex; gap: 10px; align-items: center;">
                         <label>Party: </label>
-                        <select id="reportParty" class="partyDropdown" style="width: 200px;"></select>
+                        <input type="text" id="reportParty" list="partyList" placeholder="Search party..." style="width: 200px;">
                     </div>
 
                     <div style="display:flex; gap: 10px; align-items: center;">

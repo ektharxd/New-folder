@@ -112,7 +112,9 @@ async function loadParties() {
         
         // Set innerHTML once
         datalist.innerHTML = datalistHTML;
-        reportDrop.innerHTML = reportDropHTML;
+        if (reportDrop && reportDrop.tagName === 'SELECT') {
+            reportDrop.innerHTML = reportDropHTML;
+        }
     } catch (e) {
         showToast("Error loading parties: " + e, "error");
     }
@@ -120,6 +122,7 @@ async function loadParties() {
 
 let currentTxnPage = 1;
 let totalTxnPages = 1;
+const appStartTime = Date.now();
 // Guard flag to prevent concurrent loadTransactions calls
 // Multiple rapid calls cause DOM thrashing -> input fields freeze
 // Fixed: Only one loadTransactions can run at a time
@@ -815,6 +818,10 @@ function renderCharts(data) {
     const ctxSales = document.getElementById('salesChart').getContext('2d');
     const ctxExps = document.getElementById('expenseChart').getContext('2d');
 
+    Chart.defaults.font.family = 'Google Sans, Inter, sans-serif';
+    Chart.defaults.font.size = 12;
+    Chart.defaults.color = '#6B7280';
+
     // Destroy old instances
     if (salesChartInstance) salesChartInstance.destroy();
     if (expenseChartInstance) expenseChartInstance.destroy();
@@ -880,9 +887,16 @@ async function showDashboard() {
     document.getElementById("dashCash").innerText = data.cash_balance.toFixed(2);
     document.getElementById("dashBank").innerText = data.bank_balance.toFixed(2);
     document.getElementById("dashReceivables").innerText = data.receivables.toFixed(2);
+    const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
+    const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
+    const totalFundsEl = document.getElementById("dashTotalFunds");
+    const cashRatioEl = document.getElementById("dashCashRatio");
+    if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
+    if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
 
     // Call Chart Render
     renderCharts(data);
+    updateSystemStatus(true);
 }
 
 function isViewActive(viewId) {
@@ -906,14 +920,47 @@ async function updateDashboard() {
         if (cash) cash.innerText = Number(data.cash_balance || 0).toFixed(2);
         if (bank) bank.innerText = Number(data.bank_balance || 0).toFixed(2);
         if (receivables) receivables.innerText = Number(data.receivables || 0).toFixed(2);
+        const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
+        const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
+        const totalFundsEl = document.getElementById("dashTotalFunds");
+        const cashRatioEl = document.getElementById("dashCashRatio");
+        if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
+        if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
 
         const salesCanvas = document.getElementById('salesChart');
         const expenseCanvas = document.getElementById('expenseChart');
         if (salesCanvas && expenseCanvas) {
             renderCharts(data);
         }
+        updateSystemStatus(true);
     } catch (e) {
         console.error('updateDashboard failed:', e);
+        updateSystemStatus(false);
+    }
+}
+
+function updateSystemStatus(isOnline) {
+    const backendEl = document.getElementById('statusBackend');
+    const backupEl = document.getElementById('statusBackup');
+    const uptimeEl = document.getElementById('statusUptime');
+
+    if (backendEl) {
+        backendEl.textContent = isOnline ? 'Online' : 'Offline';
+        backendEl.classList.toggle('status-online', isOnline);
+        backendEl.classList.toggle('status-offline', !isOnline);
+    }
+
+    const lastBackup = localStorage.getItem('lastBackupAt');
+    if (backupEl) {
+        backupEl.textContent = lastBackup ? new Date(lastBackup).toLocaleString() : 'Never';
+    }
+
+    if (uptimeEl) {
+        const seconds = Math.floor((Date.now() - appStartTime) / 1000);
+        const mins = Math.floor(seconds / 60);
+        const hrs = Math.floor(mins / 60);
+        const uptimeText = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m ${seconds % 60}s`;
+        uptimeEl.textContent = uptimeText;
     }
 }
 
@@ -1344,6 +1391,8 @@ async function backupDB() {
         const res = await fetch(`http://127.0.0.1:8000/backup`, { method: "POST" });
         const data = await res.json();
         if (data.status === "Backup Successful") {
+            localStorage.setItem('lastBackupAt', new Date().toISOString());
+            updateSystemStatus(true);
             if (data.warning) {
                 showToast("Backup saved on server: " + data.path, "success");
                 showToast(data.warning, "error");
