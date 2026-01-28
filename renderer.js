@@ -89,6 +89,8 @@ window.toggleSqlAuth = toggleSqlAuth;
 // testDbConnection and saveDbConfig are assigned at the bottom of the file
 window.installServerMode = installServerMode;
 window.uninstallServerMode = uninstallServerMode;
+window.restartBackend = restartBackend;
+window.stopBackend = stopBackend;
 
 async function loadParties() {
     try {
@@ -178,9 +180,15 @@ async function loadTransactions(page = 1) {
         data.forEach(txn => {
             let actionCell = "";
             if (currentRole === 'admin') {
-                actionCell = `<td style="display:flex; gap:5px;">
-                    <button class="btn-sm" onclick="openEditModal('${txn.id}')" style="background:#4b5563; padding: 4px 8px; font-size: 12px; color:white; border:none; border-radius:4px; cursor:pointer;">Edit</button>
-                    <button class="btn-sm" onclick="if(!window.isDeleting) deleteTransaction('${txn.id}')" style="background:#dc2626; padding: 4px 8px; font-size: 12px; color:white; border:none; border-radius:4px; cursor:pointer;">Del</button>
+                actionCell = `<td class="action-cell">
+                    <button class="btn-action edit" onclick="openEditModal('${txn.id}')" title="Edit">
+                        <ion-icon name="create-outline"></ion-icon>
+                        <span>Edit</span>
+                    </button>
+                    <button class="btn-action delete" onclick="if(!window.isDeleting) deleteTransaction('${txn.id}')" title="Delete">
+                        <ion-icon name="trash-outline"></ion-icon>
+                        <span>Del</span>
+                    </button>
                 </td>`;
             }
 
@@ -452,8 +460,8 @@ async function loadLedgerReport() {
     data.forEach(row => {
         let actionCell = "";
         if (currentRole === 'admin') {
-            actionCell = `<td>
-                <button class="btn-sm" onclick="openEditModal('${row.id}')" style="background:#4b5563; padding: 4px 8px; font-size: 12px; color:white; border:none; border-radius:4px; cursor:pointer;">Edit</button>
+            actionCell = `<td class="action-cell">
+                <button class="btn-action edit" onclick="openEditModal('${row.id}')">Edit</button>
             </td>`;
         }
 
@@ -1082,25 +1090,60 @@ async function loadDayBook() {
 
     try {
         const res = await fetch(`http://127.0.0.1:8000/transactions/by-date?date=${encodeURIComponent(date)}`);
+        if (res.status === 404) {
+            await loadDayBookFallback(date);
+            return;
+        }
+
         const data = await res.json();
-
-        const tbody = document.getElementById('dayBookBody');
-        tbody.innerHTML = '';
-
-        data.forEach(row => {
-            tbody.innerHTML += `
-            <tr>
-                <td>${formatDateShort(row.date)}</td>
-                <td>${row.bill_no || ''}</td>
-                <td>${row.party}</td>
-                <td>${row.type}</td>
-                <td>${row.mode}</td>
-                <td class="text-right">${Number(row.amount).toFixed(2)}</td>
-            </tr>`;
-        });
+        renderDayBookRows(data);
     } catch (e) {
         showToast('Error loading day book: ' + e, 'error');
     }
+}
+
+async function loadDayBookFallback(date) {
+    const tbody = document.getElementById('dayBookBody');
+    tbody.innerHTML = '';
+
+    let page = 1;
+    let totalPages = 1;
+    const limit = 1000;
+    const results = [];
+
+    while (page <= totalPages) {
+        const res = await fetch(`http://127.0.0.1:8000/transactions?page=${page}&limit=${limit}`);
+        const response = await res.json();
+        const rows = response.transactions || [];
+        totalPages = response.total_pages || 1;
+
+        rows.forEach(row => {
+            if (row.date === date) {
+                results.push(row);
+            }
+        });
+
+        page += 1;
+    }
+
+    renderDayBookRows(results);
+}
+
+function renderDayBookRows(rows) {
+    const tbody = document.getElementById('dayBookBody');
+    tbody.innerHTML = '';
+
+    rows.forEach(row => {
+        tbody.innerHTML += `
+        <tr>
+            <td>${formatDateShort(row.date)}</td>
+            <td>${row.bill_no || ''}</td>
+            <td>${row.party}</td>
+            <td>${row.type}</td>
+            <td>${row.mode}</td>
+            <td class="text-right">${Number(row.amount).toFixed(2)}</td>
+        </tr>`;
+    });
 }
 
 function exportDayBook() {
@@ -1346,6 +1389,33 @@ async function uninstallServerMode() {
         }
     } catch (e) {
         showToast('Uninstall failed: ' + e.message, 'error');
+    }
+}
+
+async function restartBackend() {
+    try {
+        const res = await ipcRenderer.invoke('server:restart');
+        if (res.success) {
+            showToast('Backend restarted.', 'success');
+            setTimeout(() => location.reload(), 500);
+        } else {
+            showToast('Restart failed: ' + res.error, 'error');
+        }
+    } catch (e) {
+        showToast('Restart failed: ' + e.message, 'error');
+    }
+}
+
+async function stopBackend() {
+    try {
+        const res = await ipcRenderer.invoke('server:stop');
+        if (res.success) {
+            showToast('Backend stopped.', 'success');
+        } else {
+            showToast('Stop failed: ' + res.error, 'error');
+        }
+    } catch (e) {
+        showToast('Stop failed: ' + e.message, 'error');
     }
 }
 

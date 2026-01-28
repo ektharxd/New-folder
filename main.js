@@ -68,7 +68,7 @@ async function startBackend() {
     const portFree = await isPortFree(8000, '127.0.0.1');
     if (!portFree) {
         console.warn('Backend not started: port 8000 already in use.');
-        return;
+        return false;
     }
 
     if (app.isPackaged) {
@@ -80,6 +80,7 @@ async function startBackend() {
                 console.error("Backend failed:", error);
             }
         });
+        return true;
     } else {
         // Development: start uvicorn server
         console.log("Dev Mode: Starting uvicorn backend server...");
@@ -101,6 +102,7 @@ async function startBackend() {
         backendProcess.stderr.on('data', (data) => {
             console.error(`Backend Error: ${data}`);
         });
+        return true;
     }
 }
 
@@ -177,6 +179,45 @@ ipcMain.handle('dialog:openBackup', async () => {
 
 ipcMain.handle('app:getUserDataPath', async () => {
     return app.getPath('userData');
+});
+
+ipcMain.handle('server:restart', async () => {
+    try {
+        killBackend();
+        await new Promise((r) => setTimeout(r, 300));
+        const portFree = await isPortFree(8000, '127.0.0.1');
+        if (!portFree) {
+            return { success: false, error: 'Port 8000 is still in use. Stop the existing backend and try again.' };
+        }
+        const started = await startBackend();
+        if (!started) {
+            return { success: false, error: 'Backend did not start. Port may be in use.' };
+        }
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+ipcMain.handle('server:stop', async () => {
+    try {
+        killBackend();
+        const { exec } = require('child_process');
+
+        const command = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "' +
+            'Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ' +
+            'Select-Object -First 1 -ExpandProperty OwningProcess | ' +
+            'ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"';
+
+        return await new Promise((resolve) => {
+            exec(command, (err) => {
+                if (err) return resolve({ success: false, error: err.message });
+                resolve({ success: true });
+            });
+        });
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
 });
 
 ipcMain.handle('server:install', async () => {
