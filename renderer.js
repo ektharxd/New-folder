@@ -404,6 +404,8 @@ function showView(viewId) {
         loadTransactions();
     } else if (viewId === 'ledgerView') {
         loadLedgerReport();
+    } else if (viewId === 'dayBookView') {
+        loadDayBook();
     }
 }
 
@@ -445,6 +447,8 @@ async function loadLedgerReport() {
         headerRow.appendChild(th);
     }
 
+    let runningBalance = 0;
+
     data.forEach(row => {
         let actionCell = "";
         if (currentRole === 'admin') {
@@ -453,14 +457,40 @@ async function loadLedgerReport() {
             </td>`;
         }
 
+        const typeRaw = (row.type || '').toString().trim();
+        const type = typeRaw.toLowerCase();
+        const mode = row.mode ? row.mode : '';
+        const particulars = `${typeRaw}${mode ? ' / ' + mode : ''}`;
+        const amt = Number(row.amount || 0);
+
+        const debitTypes = new Set(['sale', 'expense', 'purchase']);
+        const creditTypes = new Set(['receipt', 'reciept', 'sale return']);
+
+        let debit = '';
+        let credit = '';
+        if (debitTypes.has(type)) {
+            debit = amt.toFixed(2);
+            runningBalance += amt;
+        } else if (creditTypes.has(type)) {
+            credit = amt.toFixed(2);
+            runningBalance -= amt;
+        } else {
+            debit = amt.toFixed(2);
+            runningBalance += amt;
+        }
+
+        const balanceLabel = runningBalance < 0
+            ? `${Math.abs(runningBalance).toFixed(2)} Cr`
+            : `${runningBalance.toFixed(2)} Dr`;
+
         tbody.innerHTML += `
         <tr>
             <td>${formatDateShort(row.date)}</td>
             <td>${row.bill_no || ''}</td>
-            <td>${row.type}</td>
-            <td>${row.mode}</td>
-            <td class="text-right">${row.amount.toFixed(2)}</td>
-            <td class="text-right">${row.balance.toFixed(2)}</td>
+            <td>${particulars}</td>
+            <td class="text-right">${debit}</td>
+            <td class="text-right">${credit}</td>
+            <td class="text-right">${balanceLabel}</td>
             ${actionCell}
         </tr>`;
     });
@@ -1039,6 +1069,44 @@ async function showDailySummary() {
                 <td class="text-right">${formatMoney(row.total_sales)}</td>
             </tr>`;
     });
+}
+
+function showDayBook() {
+    showView('dayBookView');
+}
+
+async function loadDayBook() {
+    const dateInput = document.getElementById('dayBookDate');
+    const date = dateInput ? dateInput.value : '';
+    if (!date) return showToast('Select a date', 'error');
+
+    try {
+        const res = await fetch(`http://127.0.0.1:8000/transactions/by-date?date=${encodeURIComponent(date)}`);
+        const data = await res.json();
+
+        const tbody = document.getElementById('dayBookBody');
+        tbody.innerHTML = '';
+
+        data.forEach(row => {
+            tbody.innerHTML += `
+            <tr>
+                <td>${formatDateShort(row.date)}</td>
+                <td>${row.bill_no || ''}</td>
+                <td>${row.party}</td>
+                <td>${row.type}</td>
+                <td>${row.mode}</td>
+                <td class="text-right">${Number(row.amount).toFixed(2)}</td>
+            </tr>`;
+        });
+    } catch (e) {
+        showToast('Error loading day book: ' + e, 'error');
+    }
+}
+
+function exportDayBook() {
+    const date = document.getElementById('dayBookDate').value;
+    if (!date) return showToast('Select a date to export', 'error');
+    exportTableToExcel('dayBookTable', `DayBook_${date}`, `DayBook_${date}`);
 }
 
 async function showShortReport() {

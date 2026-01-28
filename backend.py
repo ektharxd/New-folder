@@ -489,6 +489,33 @@ def get_transactions(page: int = 1, limit: int = 100):
         "total_pages": total_pages
     }
 
+@app.get("/transactions/by-date")
+def get_transactions_by_date(date: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT t.txn_id, t.txn_date, t.bill_no, p.name, t.txn_type, t.payment_mode, t.amount
+        FROM transactions t WITH (NOLOCK)
+        JOIN parties p WITH (NOLOCK) ON t.party_id = p.party_id
+        WHERE t.txn_date = ?
+        ORDER BY t.txn_date DESC, t.txn_id DESC
+    """, (date,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": r[0],
+            "date": str(r[1]),
+            "bill_no": r[2] if r[2] else "",
+            "party": r[3],
+            "type": r[4],
+            "mode": r[5],
+            "amount": float(r[6])
+        }
+        for r in rows
+    ]
+
 @app.get("/summary/daily")
 def get_daily_summary():
     conn = get_db_connection()

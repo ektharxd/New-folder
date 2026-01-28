@@ -420,6 +420,36 @@ tr:hover td {
     background: #F5F5F7;
 }
 
+/* Ledger: add clear grid lines for readability */
+#ledgerTable th,
+#ledgerTable td {
+    border-right: 1px solid var(--border);
+}
+
+#ledgerTable th:last-child,
+#ledgerTable td:last-child {
+    border-right: none;
+}
+
+#ledgerTable tr {
+    border-bottom: 1px solid var(--border);
+}
+
+/* Transactions: add clear grid lines for readability */
+#entryTable th,
+#entryTable td {
+    border-right: 1px solid var(--border);
+}
+
+#entryTable th:last-child,
+#entryTable td:last-child {
+    border-right: none;
+}
+
+#entryTable tr {
+    border-bottom: 1px solid var(--border);
+}
+
 /* Footer Entry Row */
 tfoot td {
     background: #FAFAFA;
