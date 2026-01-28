@@ -416,6 +416,8 @@ function showView(viewId) {
         loadLedgerReport();
     } else if (viewId === 'dayBookView') {
         loadDayBook();
+    } else if (viewId === 'auditView') {
+        loadAuditLog('auditTableBodyView');
     }
 }
 
@@ -1939,8 +1941,12 @@ async function deleteUser(username) {
     } catch (e) { showToast("Error deleting", "error"); }
 }
 
-async function loadAuditLog() {
-    const tbody = document.getElementById('auditTableBody');
+function showAuditLogs() {
+    showView('auditView');
+}
+
+async function loadAuditLog(targetBodyId = 'auditTableBody') {
+    const tbody = document.getElementById(targetBodyId);
     try {
         const res = await fetch('http://127.0.0.1:8000/audit');
         const logs = await res.json();

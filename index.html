@@ -161,6 +161,9 @@
             <a class="nav-item" onclick="showView('partyView'); activateNav(this)"> 
                 <ion-icon name="people-outline"></ion-icon> Add Party
             </a>
+            <a class="nav-item" onclick="showAuditLogs(); activateNav(this)">
+                <ion-icon name="document-text-outline"></ion-icon> Audit Logs
+            </a>
             <a class="nav-item" onclick="showView('settingsView'); activateNav(this)">
                 <ion-icon name="settings-outline"></ion-icon> Settings
             </a>
@@ -549,6 +552,32 @@
                             <td class="text-right" id="pnlProfit">0</td>
                         </tr>
                     </table>
+                </div>
+            </div>
+
+            <!-- Audit Logs View -->
+            <div id="auditView" class="view-section">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2>Audit Logs</h2>
+                    <div>
+                        <button class="secondary" onclick="loadAuditLog('auditTableBodyView')">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="card" style="padding: 0;">
+                    <div style="max-height: 70vh; overflow-y: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>User</th>
+                                    <th>Action</th>
+                                    <th>Details</th>
+                                </tr>
+                            </thead>
+                            <tbody id="auditTableBodyView"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
