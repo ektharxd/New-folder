@@ -339,7 +339,7 @@ async function saveEntry() {
         if (statusText.includes("added") || statusText.includes("saved") || statusText.includes("success")) {
             showToast("Entry Saved Successfully!", "success");
             console.time('saveEntry-reload');
-            await loadTransactions();
+            await loadTransactions(currentTxnPage);
             console.timeEnd('saveEntry-reload');
             
             // Auto-increment bill number
@@ -350,6 +350,8 @@ async function saveEntry() {
             document.getElementById("newBill").value = nextBill;
             document.getElementById("newParty").value = "";
             document.getElementById("newAmount").value = "";
+            document.getElementById("newType").value = "Sale";
+            document.getElementById("newMode").value = "Credit";
             document.getElementById("newBill").focus();
         } else {
             showToast("Error: " + JSON.stringify(data), "error");
@@ -627,7 +629,7 @@ async function submitTxnEdit() {
             // Small delay to let DOM settle before reload
             setTimeout(() => {
                 if (isViewActive('ledgerView')) loadLedgerReport();
-                loadTransactions();
+                loadTransactions(currentTxnPage);
                 updateDashboard();
             }, 50);
         } else {
@@ -702,7 +704,7 @@ async function performDelete(id) {
             
             // Reload data
             if (isViewActive('ledgerView')) loadLedgerReport();
-            await loadTransactions();
+            await loadTransactions(currentTxnPage);
             updateDashboard();
             unlockUiAfterModal();
             
