@@ -1698,7 +1698,8 @@ async function handleLogin() {
         sessionStorage.setItem('company', company);
 
         checkAuth();
-        showToast("Hey" + data.username, "success");
+        showToast(`Hey ${data.username}, great to see you again! 😄`, "success");
+
 
         loadParties();
         showDashboard();
@@ -1744,7 +1745,8 @@ async function handleLogin() {
         sessionStorage.setItem('company', company);
 
         checkAuth();
-        showToast("Hey " + data.username, "success");
+        showToast(`Hey ${data.username}, great to see you again! 😄`, "success");
+
 
         // Load initial data
         loadParties();
