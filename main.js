@@ -1,7 +1,10 @@
 const { app, BrowserWindow, ipcMain, dialog, globalShortcut } = require('electron');
+const { shell } = require('electron');
 const path = require('path');
-const { execFile, spawn } = require('child_process');
+const { execFile, spawn, exec } = require('child_process');
 const net = require('net');
+const fs = require('fs');
+const http = require('http');
 
 let mainWindow;
 let splashWindow;
@@ -59,27 +62,84 @@ function isPortFree(port, host = '127.0.0.1') {
     });
 }
 
+function isBackendResponsive(timeoutMs = 1500) {
+    return new Promise((resolve) => {
+        const req = http.get({
+            hostname: '127.0.0.1',
+            port: 8000,
+            path: '/companies',
+            timeout: timeoutMs
+        }, (res) => {
+            res.resume();
+            resolve(true);
+        });
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => {
+            req.destroy();
+            resolve(false);
+        });
+    });
+}
+
+function killPort8000() {
+    return new Promise((resolve) => {
+        const command = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "' +
+            'Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ' +
+            'Select-Object -First 1 -ExpandProperty OwningProcess | ' +
+            'ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"';
+        exec(command, () => resolve());
+    });
+}
+
 async function startBackend() {
     // Start backend in both dev and production mode
     const { spawn } = require('child_process');
     
     const envVars = { ...process.env, FINLOGS_CONFIG_DIR: app.getPath('userData') };
 
-    const portFree = await isPortFree(8000, '127.0.0.1');
+    let portFree = await isPortFree(8000, '127.0.0.1');
     if (!portFree) {
-        console.warn('Backend not started: port 8000 already in use.');
-        return false;
+        const responsive = await isBackendResponsive();
+        if (responsive) {
+            console.warn('Backend already running on port 8000.');
+            return true;
+        }
+        await killPort8000();
+        portFree = await isPortFree(8000, '127.0.0.1');
+        if (!portFree) {
+            console.warn('Backend not started: port 8000 still in use.');
+            return false;
+        }
     }
 
     if (app.isPackaged) {
         // Production: use compiled backend.exe
         const backendPath = path.join(process.resourcesPath, 'backend.exe');
+        if (!fs.existsSync(backendPath)) {
+            const msg = `Backend executable not found at: ${backendPath}\n` +
+                `Build backend.exe (PyInstaller) and place it in dist/backend.exe before packaging.`;
+            console.error(msg);
+            try {
+                const logPath = path.join(app.getPath('userData'), 'backend.log');
+                fs.appendFileSync(logPath, `\n[${new Date().toISOString()}] ${msg}\n`);
+            } catch (_) {}
+            dialog.showErrorBox('Backend missing', msg);
+            return false;
+        }
         console.log("Starting backend:", backendPath);
-        backendProcess = execFile(backendPath, { env: envVars }, (error) => {
-            if (error) {
-                console.error("Backend failed:", error);
-            }
+        const logPath = path.join(app.getPath('userData'), 'backend.log');
+        const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+        logStream.write(`\n[${new Date().toISOString()}] Starting backend: ${backendPath}\n`);
+
+        backendProcess = spawn(backendPath, [], {
+            env: envVars,
+            cwd: process.resourcesPath,
+            windowsHide: true
         });
+
+        backendProcess.stdout.on('data', (data) => logStream.write(data));
+        backendProcess.stderr.on('data', (data) => logStream.write(data));
+        backendProcess.on('exit', (code) => logStream.write(`\n[${new Date().toISOString()}] Backend exit: ${code}\n`));
         return true;
     } else {
         // Development: start uvicorn server
@@ -181,6 +241,20 @@ ipcMain.handle('app:getUserDataPath', async () => {
     return app.getPath('userData');
 });
 
+ipcMain.handle('folder:openAutoBackup', async () => {
+    try {
+        const fs = require('fs');
+        const backupDir = 'C:\\Finlogs\\Auto';
+        if (!fs.existsSync(backupDir)) {
+            fs.mkdirSync(backupDir, { recursive: true });
+        }
+        await shell.openPath(backupDir);
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
 
 ipcMain.handle('server:restart', async () => {
     try {
@@ -211,8 +285,12 @@ ipcMain.handle('server:stop', async () => {
             'ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"';
 
         return await new Promise((resolve) => {
-            exec(command, (err) => {
+            exec(command, async (err) => {
                 if (err) return resolve({ success: false, error: err.message });
+                const portFree = await isPortFree(8000, '127.0.0.1');
+                if (!portFree) {
+                    return resolve({ success: false, error: 'Port 8000 is still in use.' });
+                }
                 resolve({ success: true });
             });
         });
@@ -224,7 +302,6 @@ ipcMain.handle('server:stop', async () => {
 ipcMain.handle('server:install', async () => {
     try {
         const taskName = 'M-FinlogsServer';
-        const fs = require('fs');
         const userDataPath = app.getPath('userData');
         
         // Create a startup script instead of inline command
@@ -252,10 +329,29 @@ python -m uvicorn backend:app --host 0.0.0.0 --port 8000`;
         
         const { exec } = require('child_process');
         return await new Promise((resolve) => {
-            // Create scheduled task that runs the script
+            // Try with highest privileges first (boot start)
             exec(`schtasks /Create /F /SC ONSTART /RL HIGHEST /TN "${taskName}" /TR "\\"${scriptPath}\\""`, (err, stdout, stderr) => {
-                if (err) return resolve({ success: false, error: stderr || err.message });
-                resolve({ success: true });
+                if (!err) return resolve({ success: true });
+
+                const errMsg = (stderr || err.message || '').toString();
+                if (errMsg.toLowerCase().includes('access is denied')) {
+                    // Retry as current user at logon without admin
+                    exec(`schtasks /Create /F /SC ONLOGON /RL LIMITED /TN "${taskName}" /TR "\\"${scriptPath}\\""`, (err2, stdout2, stderr2) => {
+                        if (!err2) return resolve({ success: true, warning: 'Installed as user logon task.' });
+
+                        // Final fallback: copy script to Startup folder
+                        try {
+                            const startupDir = app.getPath('startup');
+                            const startupPath = path.join(startupDir, 'M-FinlogsServer.bat');
+                            fs.copyFileSync(scriptPath, startupPath);
+                            return resolve({ success: true, warning: 'Installed via Startup folder.' });
+                        } catch (e) {
+                            return resolve({ success: false, error: (stderr2 || err2.message || e.message).toString() });
+                        }
+                    });
+                } else {
+                    return resolve({ success: false, error: errMsg });
+                }
             });
         });
     } catch (e) {
@@ -266,9 +362,9 @@ python -m uvicorn backend:app --host 0.0.0.0 --port 8000`;
 ipcMain.handle('server:uninstall', async () => {
     try {
         const { exec } = require('child_process');
-        const fs = require('fs');
         const userDataPath = app.getPath('userData');
         const scriptPath = path.join(userDataPath, 'start_server.bat');
+        const startupPath = path.join(app.getPath('startup'), 'M-FinlogsServer.bat');
         
         return await new Promise((resolve) => {
             exec(`schtasks /Delete /F /TN "M-FinlogsServer"`, (err, stdout, stderr) => {
@@ -277,11 +373,20 @@ ipcMain.handle('server:uninstall', async () => {
                     if (fs.existsSync(scriptPath)) {
                         fs.unlinkSync(scriptPath);
                     }
+                    if (fs.existsSync(startupPath)) {
+                        fs.unlinkSync(startupPath);
+                    }
                 } catch (e) {
                     console.error('Could not delete script file:', e);
                 }
-                
-                if (err) return resolve({ success: false, error: stderr || err.message });
+
+                if (err) {
+                    const errMsg = (stderr || err.message || '').toString();
+                    if (errMsg.toLowerCase().includes('cannot find the file specified')) {
+                        return resolve({ success: true, warning: 'Task not found. Nothing to remove.' });
+                    }
+                    return resolve({ success: false, error: errMsg });
+                }
                 resolve({ success: true });
             });
         });

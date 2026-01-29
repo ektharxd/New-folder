@@ -641,6 +641,8 @@
                 <div class="card">
                     <h3>Backup & Restore</h3>
                     <button onclick="backupDB()">Backup Database</button>
+                    <button class="secondary" onclick="runAutoBackupNow()" style="margin-left: 8px;">Run Auto Backup Now</button>
+                    <button class="secondary" onclick="openAutoBackupFolder()" style="margin-left: 8px;">Open Auto Backup Folder</button>
                     <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
                         <label style="display:block; margin-bottom: 8px;">Restore from File:</label>
                         <button class="secondary" onclick="restoreDB()">Choose Backup & Restore</button>

@@ -91,6 +91,8 @@ window.installServerMode = installServerMode;
 window.uninstallServerMode = uninstallServerMode;
 window.restartBackend = restartBackend;
 window.stopBackend = stopBackend;
+window.runAutoBackupNow = runAutoBackupNow;
+window.openAutoBackupFolder = openAutoBackupFolder;
 
 async function loadParties() {
     try {
@@ -122,7 +124,7 @@ async function loadParties() {
 
 let currentTxnPage = 1;
 let totalTxnPages = 1;
-const appStartTime = Date.now();
+let appStartTime = Date.now();
 // Guard flag to prevent concurrent loadTransactions calls
 // Multiple rapid calls cause DOM thrashing -> input fields freeze
 // Fixed: Only one loadTransactions can run at a time
@@ -944,6 +946,7 @@ function updateSystemStatus(isOnline) {
     const backupEl = document.getElementById('statusBackup');
     const uptimeEl = document.getElementById('statusUptime');
 
+    localStorage.setItem('backendStatus', isOnline ? 'online' : 'offline');
     if (backendEl) {
         backendEl.textContent = isOnline ? 'Online' : 'Offline';
         backendEl.classList.toggle('status-online', isOnline);
@@ -956,11 +959,15 @@ function updateSystemStatus(isOnline) {
     }
 
     if (uptimeEl) {
-        const seconds = Math.floor((Date.now() - appStartTime) / 1000);
-        const mins = Math.floor(seconds / 60);
-        const hrs = Math.floor(mins / 60);
-        const uptimeText = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m ${seconds % 60}s`;
-        uptimeEl.textContent = uptimeText;
+        if (!isOnline) {
+            uptimeEl.textContent = 'Stopped';
+        } else {
+            const seconds = Math.floor((Date.now() - appStartTime) / 1000);
+            const mins = Math.floor(seconds / 60);
+            const hrs = Math.floor(mins / 60);
+            const uptimeText = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m ${seconds % 60}s`;
+            uptimeEl.textContent = uptimeText;
+        }
     }
 }
 
@@ -1047,6 +1054,11 @@ window.onload = function () {
             loadTransactions();
         }
     });
+    const status = localStorage.getItem('backendStatus');
+    if (status === 'offline') {
+        updateSystemStatus(false);
+    }
+    setInterval(checkBackendStatus, 15000);
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark') {
         document.documentElement.setAttribute('data-theme', 'dark');
@@ -1085,6 +1097,22 @@ window.onload = function () {
             }
         }
     }, 1000); // Check every second
+}
+
+async function checkBackendStatus() {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch("http://127.0.0.1:8000/report/dashboard", { signal: controller.signal });
+        clearTimeout(timeout);
+        if (res.ok) {
+            updateSystemStatus(true);
+        } else {
+            updateSystemStatus(false);
+        }
+    } catch (e) {
+        updateSystemStatus(false);
+    }
 }
 
 // Other Reports (Keeping existing logic mostly same but adding Error Handling)
@@ -1405,6 +1433,33 @@ async function backupDB() {
     } catch (e) { showToast("Error: " + e, "error"); }
 }
 
+async function runAutoBackupNow() {
+    try {
+        const res = await fetch(`http://127.0.0.1:8000/backup/auto`, { method: "POST" });
+        const data = await res.json();
+        if (data.status === "Backup Successful") {
+            localStorage.setItem('lastBackupAt', new Date().toISOString());
+            updateSystemStatus(true);
+            showToast("Auto backup created: " + data.path, "success");
+        } else {
+            showToast("Auto backup failed: " + data.detail, "error");
+        }
+    } catch (e) {
+        showToast("Auto backup error: " + e, "error");
+    }
+}
+
+async function openAutoBackupFolder() {
+    try {
+        const res = await ipcRenderer.invoke('folder:openAutoBackup');
+        if (!res.success) {
+            showToast('Open folder failed: ' + res.error, 'error');
+        }
+    } catch (e) {
+        showToast('Open folder failed: ' + e.message, 'error');
+    }
+}
+
 async function restoreDB() {
     const path = await ipcRenderer.invoke('dialog:openBackup');
     if (!path) return;
@@ -1464,6 +1519,8 @@ async function stopBackend() {
         const res = await ipcRenderer.invoke('server:stop');
         if (res.success) {
             showToast('Backend stopped.', 'success');
+            updateSystemStatus(false);
+            appStartTime = Date.now();
         } else {
             showToast('Stop failed: ' + res.error, 'error');
         }
@@ -2032,7 +2089,7 @@ async function loadDbConfig() {
         // Load defaults when backend is not running
         const localCfg = await loadClientConfig();
         document.getElementById('cfgServer').value = 'localhost';
-        document.getElementById('cfgDatabase').value = 'M_Finlogs_Accounts';
+        document.getElementById('cfgDatabase').value = 'Finlogs';
         document.getElementById('cfgAuthType').value = 'windows';
         document.getElementById('cfgBackupDir').value = '';
         document.getElementById('cfgApiBase').value = localCfg.api_base || apiBase;

@@ -58,12 +58,6 @@ def startup_init_db():
     except Exception:
         pass
 
-if __name__ == "__main__":
-    import uvicorn
-    host = os.environ.get("FINLOGS_HOST", "127.0.0.1")
-    port = int(os.environ.get("FINLOGS_PORT", "8000"))
-    uvicorn.run("backend:app", host=host, port=port, reload=False)
-
 def normalize_company(name: str) -> str:
     base = re.sub(r"\s+", "_", name.strip().lower())
     return re.sub(r"[^a-z0-9_]+", "", base) or "default"
@@ -820,6 +814,7 @@ def backup_database_auto():
     try:
         import datetime
         import shutil
+        import tempfile
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         conn = get_master_connection()
         cursor = conn.cursor()
@@ -827,6 +822,15 @@ def backup_database_auto():
         # Auto backups go to C:\Finlogs\Auto
         backup_dir = "C:\\Finlogs\\Auto"
         os.makedirs(backup_dir, exist_ok=True)
+
+        # Permission check (create + delete test file)
+        try:
+            test_file = os.path.join(backup_dir, f".perm_test_{timestamp}.tmp")
+            with open(test_file, "w") as f:
+                f.write("test")
+            os.remove(test_file)
+        except Exception as perm_err:
+            return {"status": "Error", "detail": f"Auto backup failed: No write permission on {backup_dir}. {perm_err}"}
         
         database = SQL_DATABASE
         backup_path = os.path.join(backup_dir, f"auto_{database}_{timestamp}.bak")
@@ -835,6 +839,23 @@ def backup_database_auto():
         backup_query = f"BACKUP DATABASE [{database}] TO DISK = '{safe_path}' WITH FORMAT, INIT"
         cursor.execute(backup_query)
         conn.close()
+
+        # Prune old backups, keep latest 10
+        try:
+            files = [
+                os.path.join(backup_dir, f)
+                for f in os.listdir(backup_dir)
+                if f.lower().endswith('.bak') and f.startswith('auto_')
+            ]
+            files.sort(key=lambda p: os.path.getmtime(p))
+            while len(files) > 10:
+                old = files.pop(0)
+                try:
+                    os.remove(old)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         return {"status": "Backup Successful", "path": backup_path}
     except Exception as e:
