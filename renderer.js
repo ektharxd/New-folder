@@ -282,6 +282,12 @@ async function saveEntry() {
     const mode = document.getElementById("newMode").value;
     const amount = document.getElementById("newAmount").value;
     const isStrict = document.getElementById("strictPartyMode").checked;
+    
+    // Check if we're in edit mode
+    if (editingTransactionId) {
+        await updateTransaction(editingTransactionId, date, bill, party, type, mode, amount);
+        return;
+    }
 
     if (!date || !amount || !type || !mode || !party) {
         showToast("All fields (Date, Party, Type, Mode, Amount) are mandatory.", "error");
@@ -514,22 +520,127 @@ async function loadLedgerReport() {
 }
 
 // --- Edit Transaction Logic ---
-function openEditModal(id) {
-    const modal = document.getElementById('editTxnModal');
-    if (!modal) return;
+let editingTransactionId = null;
+
+async function openEditModal(id) {
+    try {
+        // Fetch the transaction details
+        const res = await fetch(`http://127.0.0.1:8000/transactions?page=1&limit=1000`);
+        const response = await res.json();
+        const txn = response.transactions.find(t => t.id == id);
+        
+        if (!txn) {
+            showToast('Transaction not found', 'error');
+            return;
+        }
+        
+        // Set edit mode
+        editingTransactionId = id;
+        
+        // Switch to entry view
+        showView('entryView');
+        activateNav(document.querySelector('a[onclick*="entryView"]'));
+        
+        // Pre-fill the form with transaction data
+        document.getElementById('newDate').value = txn.date;
+        document.getElementById('newBill').value = txn.bill_no || '';
+        document.getElementById('newParty').value = txn.party;
+        document.getElementById('newType').value = txn.type;
+        document.getElementById('newMode').value = txn.mode;
+        document.getElementById('newAmount').value = txn.amount;
+        
+        // Show edit indicator banner
+        let editBanner = document.getElementById('editModeBanner');
+        if (!editBanner) {
+            editBanner = document.createElement('div');
+            editBanner.id = 'editModeBanner';
+            editBanner.style.cssText = 'background: linear-gradient(135deg, #000000, rgb(12, 12, 11)); color: white; padding: 12px 16px; margin: 12px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-weight: 500;';
+            
+            const textSpan = document.createElement('span');
+            textSpan.innerHTML = '✏️ Editing Transaction - Press Enter in Amount to Update';
+            editBanner.appendChild(textSpan);
+            
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = '✖ Cancel Edit';
+            cancelBtn.style.cssText = 'background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 500;';
+            cancelBtn.onclick = cancelEdit;
+            editBanner.appendChild(cancelBtn);
+            
+            const entryCard = document.querySelector('#entryView .card');
+            if (entryCard && entryCard.parentNode) {
+                entryCard.parentNode.insertBefore(editBanner, entryCard);
+            }
+        }
+        editBanner.style.display = 'flex';
+        
+        // Focus on the first field
+        document.getElementById('newDate').focus();
+        
+        showToast('✏️ Editing transaction - Modify and press Enter in Amount', 'info');
+    } catch (e) {
+        showToast('Error loading transaction: ' + e, 'error');
+    }
+}
+
+function cancelEdit() {
+    editingTransactionId = null;
     
-    modal.style.display = 'flex';
-    modal.style.pointerEvents = 'auto';
-    modal.style.visibility = 'visible';
-    modal.style.zIndex = '2000';
+    // Reset form
+    document.getElementById('newBill').value = '';
+    document.getElementById('newParty').value = '';
+    document.getElementById('newAmount').value = '';
+    document.getElementById('newType').value = 'Sale';
+    document.getElementById('newMode').value = 'Credit';
     
-    document.getElementById('editTxnId').value = id;
-    document.getElementById('editValue').value = '';
+    // Hide edit banner
+    const editBanner = document.getElementById('editModeBanner');
+    if (editBanner) editBanner.style.display = 'none';
     
-    // Ensure modal is fully rendered before focusing input
-    requestAnimationFrame(() => {
-        document.getElementById('editValue').focus();
-    });
+    showToast('Edit cancelled', 'info');
+}
+
+async function updateTransaction(id, date, bill, party, type, mode, amount) {
+    try {
+        // Update each field that changed
+        const updates = [
+            { field: 'txn_date', value: date },
+            { field: 'bill_no', value: bill },
+            { field: 'txn_type', value: type },
+            { field: 'payment_mode', value: mode },
+            { field: 'amount', value: amount }
+        ];
+        
+        for (const update of updates) {
+            const res = await fetch("http://127.0.0.1:8000/transaction/edit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    txn_id: parseInt(id),
+                    admin_user: sessionStorage.getItem("username"),
+                    field: update.field,
+                    new_value: update.value
+                })
+            });
+            
+            const data = await res.json();
+            if (data.status !== "Updated Successfully") {
+                showToast(`Update failed for ${update.field}: ` + data.detail, "error");
+                return;
+            }
+        }
+        
+        showToast("Transaction Updated Successfully!", "success");
+        
+        // Reset edit mode
+        cancelEdit();
+        
+        // Reload transactions
+        await loadTransactions(currentTxnPage);
+        updateDashboard();
+        
+    } catch (e) {
+        showToast("Error updating transaction: " + e, "error");
+    }
 }
 
 function closeEditModal() {

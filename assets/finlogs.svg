@@ -1,13 +1,3 @@
-<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#4F46E5"/>
-      <stop offset="100%" stop-color="#10B981"/>
-    </linearGradient>
-  </defs>
-  <rect x="24" y="24" width="208" height="208" rx="48" fill="url(#g)"/>
-  <rect x="64" y="148" width="24" height="44" rx="8" fill="white" opacity="0.95"/>
-  <rect x="104" y="124" width="24" height="68" rx="8" fill="white" opacity="0.95"/>
-  <rect x="144" y="96" width="24" height="96" rx="8" fill="white" opacity="0.95"/>
-  <path d="M60 84 L100 120 L140 88 L188 120" stroke="white" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+<svg width="433" height="373" viewBox="0 0 433 373" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M357.088 98.1322L92.8927 341.266V243.622L157.818 185.524L74.9135 98.1322V373L0 312.949V49.7984L74.9135 0L216.25 135.725L357.088 0L433 49.7984V312.949L360.584 373L357.088 237.275H242.22L310.641 175.759H357.088V98.1322Z" fill="#FDCB0B"/>
 </svg>
