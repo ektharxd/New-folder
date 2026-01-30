@@ -12,6 +12,9 @@
     <link rel="icon" type="image/svg+xml" href="assets/finlogs.svg">
     <link rel="icon" type="image/x-icon" href="assets/finlogs.ico">
     <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="skeleton-loaders.css">
+    <link rel="stylesheet" href="chip-sidebar-dark.css">
+    <link rel="stylesheet" href="chip-sidebar-advanced.css">
     <!-- Ionicons for Icons -->
     <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
     <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
@@ -204,7 +207,8 @@
                     <div style="display:grid; grid-template-columns: 140px 160px 1fr 140px 140px 160px; gap: 10px; align-items:center;">
                         <input type="date" id="newDate" onkeydown="handleEntryNavigation(event, 'newBill')">
                         <input type="text" id="newBill" placeholder="Ref/Bill" onkeydown="handleEntryNavigation(event, 'newParty')">
-                        <input type="text" id="newParty" list="partyList" placeholder="Select Party" onkeydown="handleEntryNavigation(event, 'newType')">
+                        <input type="text" id="newParty" list="partyList" placeholder="Select Party" value="Customer" onkeydown="handleEntryNavigation(event, 'newType')" onfocus="if(this.value==='Customer') this.value=''; this.select();" onblur="if(this.value==='') this.value='Customer';">
+
                         <select id="newType" onkeydown="handleEntryNavigation(event, 'newMode')">
                             <option>Sale</option>
                             <option>Sale Return</option>
@@ -217,7 +221,7 @@
                             <option>UPI</option>
                             <option>Bank</option>
                         </select>
-                        <input type="number" id="newAmount" placeholder="0.00" onkeydown="handleEntryNavigation(event, 'save')">
+                        <input type="number" id="newAmount" placeholder="0.00" min="0" step="1" onkeydown="handleEntryNavigation(event, 'save')" oninput="if(this.value < 0) this.value = ''; if(this.value && !this.value.match(/^\d+(\.\d{1,2})?$/)) this.value = Math.floor(this.value * 100) / 100;">
                     </div>
                     <datalist id="partyList"></datalist>
                     <div style="margin-top: 8px; text-align: right; color: var(--text-secondary); font-size: 13px;">
@@ -433,13 +437,8 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h2>Daily Summary</h2>
                     <div>
-                        <!-- Note: Daily Summary is div-based, not table. Creating a hidden table for export might be needed or just printing? 
-                             Actually user wants Export to Excel. SheetJS can export JSON data too. 
-                             For now let's add Print. Exporting this specific card layout is tricky without a table. 
-                             I'll skip Excel for Summary View for now or add it later if critical. 
-                             User asked for "print preview and print to excel option too" generally. 
-                             Let's prioritize Table views first. -->
-                        <button class="secondary" onclick="window.print()">Print</button>
+                            <button class="secondary" onclick="exportTableToExcel('dailySummaryTable', 'Daily_Summary')">Export Excel</button>
+                            <button class="secondary" onclick="window.print()">Print</button>
                     </div>
                 </div>
                 <table id="dailySummaryTable">
@@ -466,6 +465,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h2>Short / Excess Report</h2>
                     <div>
+                        <button class="secondary" onclick="exportTableToExcel('shortReportTable', 'Short_Excess_Report')">Export Excel</button>
                         <button class="secondary" onclick="window.print()">Print</button>
                     </div>
                 </div>
@@ -505,7 +505,14 @@
             <!-- Expense Report View -->
             <div id="expenseReportView" class="view-section">
                 <h2>Expense Report</h2>
-                <table>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                    <div></div>
+                    <div>
+                        <button class="secondary" onclick="exportTableToExcel('expenseReportTable', 'Expense_Report')">Export Excel</button>
+                        <button class="secondary" onclick="window.print()">Print</button>
+                    </div>
+                </div>
+                <table id="expenseReportTable">
                     <thead>
                         <tr>
                             <th>Date</th>

@@ -321,23 +321,28 @@ def select_company(req: CompanySelectRequest):
     init_db(name)
     return {"status": "Selected", "company": name}
 
+class PartyCreate(BaseModel):
+    name: str
+    ptype: str
+    credit: bool
+
 @app.post("/party")
-def create_party(name: str, ptype: str, credit: bool):
+def create_party(party: PartyCreate):
     conn = get_db_connection()
     cursor = conn.cursor()
     
     # Logic Fix: Only one Bank allowed
-    if ptype == "Bank":
+    if party.ptype == "Bank":
         count = cursor.execute("SELECT COUNT(*) FROM parties WHERE type = 'Bank'").fetchone()[0]
         if count > 0:
              conn.close()
              raise HTTPException(status_code=400, detail="Only one Bank account is allowed.")
 
-    normalized = name.lower().replace(" ", "_")
+    normalized = party.name.lower().replace(" ", "_")
     try:
         cursor.execute(
             "INSERT INTO parties (name, normalized_name, type, credit_allowed) VALUES (?, ?, ?, ?)",
-            (name, normalized, ptype, 1 if credit else 0)
+            (party.name, normalized, party.ptype, 1 if party.credit else 0)
         )
         conn.close()
         return {"status": "Party Created"}
@@ -481,6 +486,60 @@ def get_transactions(page: int = 1, limit: int = 100):
         "limit": limit,
         "total": total,
         "total_pages": total_pages
+    }
+
+@app.get("/transactions/by-date")
+def get_transactions_by_date(date: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT t.txn_id, t.txn_date, t.bill_no, p.name, t.txn_type, t.payment_mode, t.amount
+        FROM transactions t WITH (NOLOCK)
+        JOIN parties p WITH (NOLOCK) ON t.party_id = p.party_id
+        WHERE t.txn_date = ?
+        ORDER BY t.txn_date DESC, t.txn_id DESC
+    """, (date,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": r[0],
+            "date": str(r[1]),
+            "bill_no": r[2] if r[2] else "",
+            "party": r[3],
+            "type": r[4],
+            "mode": r[5],
+            "amount": float(r[6])
+        }
+        for r in rows
+    ]
+
+@app.get("/transaction/{txn_id}")
+def get_single_transaction(txn_id: int):
+    """Get a single transaction by ID for efficient edit modal loading"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT t.txn_id, t.txn_date, t.bill_no, p.name, t.txn_type, t.payment_mode, t.amount
+        FROM transactions t WITH (NOLOCK)
+        JOIN parties p WITH (NOLOCK) ON t.party_id = p.party_id
+        WHERE t.txn_id = ?
+    """, (txn_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    return {
+        "id": row[0],
+        "date": str(row[1]),
+        "bill_no": row[2] if row[2] else "",
+        "party": row[3],
+        "type": row[4],
+        "mode": row[5],
+        "amount": float(row[6])
     }
 
 @app.get("/transactions/by-date")

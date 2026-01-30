@@ -56,13 +56,12 @@ window.fetch = (url, options) => {
 
 // Database Configuration Functions - defined early for inline handlers
 function showDbConfig() {
-    console.log('showDbConfig called');
     const modal = document.getElementById('dbConfigModal');
     if (modal) {
         modal.style.display = 'flex';
         loadDbConfig();
     } else {
-        console.error('dbConfigModal not found');
+        showToast('Configuration modal not found', 'error');
     }
 }
 
@@ -94,10 +93,41 @@ window.stopBackend = stopBackend;
 window.runAutoBackupNow = runAutoBackupNow;
 window.openAutoBackupFolder = openAutoBackupFolder;
 
-async function loadParties() {
+const PARTY_CACHE_TTL_MS = 5 * 60 * 1000;
+let partyCache = { data: null, ts: 0 };
+
+// Centralized fetch wrapper with timeout and error handling
+async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
     try {
-        const res = await fetch("http://127.0.0.1:8000/parties");
-        const data = await res.json();
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response;
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            throw new Error('Request timeout - server not responding');
+        }
+        throw error;
+    }
+}
+
+async function loadParties(force = false) {
+    try {
+        const now = Date.now();
+        let data = partyCache.data;
+
+        if (!force && data && (now - partyCache.ts) < PARTY_CACHE_TTL_MS) {
+            // Use cached parties
+        } else {
+            const res = await fetchWithTimeout("http://127.0.0.1:8000/parties");
+            data = await res.json();
+            partyCache = { data, ts: now };
+        }
 
         const datalist = document.getElementById("partyList");
         const reportDrop = document.getElementById("reportParty");
@@ -125,15 +155,14 @@ async function loadParties() {
 let currentTxnPage = 1;
 let totalTxnPages = 1;
 let appStartTime = Date.now();
+let currentTransactionsCache = [];
 // Guard flag to prevent concurrent loadTransactions calls
 // Multiple rapid calls cause DOM thrashing -> input fields freeze
 // Fixed: Only one loadTransactions can run at a time
 let isLoadingTransactions = false;
 
 async function loadTransactions(page = 1) {
-    // Prevent concurrent calls that cause DOM thrashing
     if (isLoadingTransactions) {
-        console.log('loadTransactions: already loading, skipping...');
         return;
     }
     
@@ -145,25 +174,20 @@ async function loadTransactions(page = 1) {
             return;
         }
         
-        console.time('loadTransactions-total');
-        console.time('loadTransactions-fetch');
-        const res = await fetch(`http://127.0.0.1:8000/transactions?page=${page}&limit=100`);
+        const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions?page=${page}&limit=50`);
         const response = await res.json();
         
         // Validate response format
         if (!response || !response.transactions) {
-            console.error('Invalid response format:', response);
             showToast("Error: Invalid server response", "error");
             return;
         }
         
         const data = response.transactions;
+        currentTransactionsCache = data;
         currentTxnPage = response.page || 1;
         totalTxnPages = response.total_pages || 1;
-        console.timeEnd('loadTransactions-fetch');
-        console.log('Transaction count:', data.length);
 
-        console.time('loadTransactions-render');
         const tbody = document.getElementById("transactionList");
         
         // Admin Edit Column Header (Recent Transactions Table)
@@ -211,14 +235,12 @@ async function loadTransactions(page = 1) {
         
         // Set innerHTML once instead of 500 times
         tbody.innerHTML = rowsHTML;
-        console.timeEnd('loadTransactions-render');
 
         // Set default date if not set
         const dateInput = document.getElementById("newDate");
         if (!dateInput.value) {
             dateInput.valueAsDate = new Date();
         }
-        console.timeEnd('loadTransactions-total');
         
         // Update pagination controls
         const pageInfo = document.getElementById('txnPageInfo');
@@ -241,7 +263,6 @@ async function loadTransactions(page = 1) {
             void appContent.offsetHeight;
         }
     } catch (e) {
-        console.timeEnd('loadTransactions-total');
         showToast("Error loading transactions: " + e, "error");
     } finally {
         isLoadingTransactions = false;
@@ -282,6 +303,12 @@ async function saveEntry() {
     const mode = document.getElementById("newMode").value;
     const amount = document.getElementById("newAmount").value;
     const isStrict = document.getElementById("strictPartyMode").checked;
+        // Validate amount
+        if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+            showToast("Amount must be greater than 0", "error");
+            document.getElementById("newAmount").focus();
+            return;
+        }
     
     // Check if we're in edit mode
     if (editingTransactionId) {
@@ -326,9 +353,12 @@ async function saveEntry() {
                 if (!pType) return;
 
                 const isCredit = pType === "Credit Customer";
-                await fetch(`http://127.0.0.1:8000/party?name=${party}&ptype=${pType}&credit=${isCredit}`, { method: "POST" });
-                // Reload to update cache
-                await loadParties();
+                await fetchWithTimeout("http://127.0.0.1:8000/party", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: party, ptype: pType, credit: isCredit })
+                });
+                await loadParties(true);
             } else {
                 return;
             }
@@ -359,7 +389,7 @@ async function saveEntry() {
             
             // Clear inputs
             document.getElementById("newBill").value = nextBill;
-            document.getElementById("newParty").value = "";
+            document.getElementById("newParty").value = "Customer";
             document.getElementById("newAmount").value = "";
             document.getElementById("newType").value = "Sale";
             document.getElementById("newMode").value = "Credit";
@@ -401,12 +431,16 @@ async function createParty() {
     if (!name) return showToast("Enter Party Name", "error");
 
     try {
-        const res = await fetch(`http://127.0.0.1:8000/party?name=${name}&ptype=${type}&credit=${credit}`, { method: "POST" });
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/party", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, ptype: type, credit })
+        });
         const data = await res.json();
         if (data.status === "Party Created") {
             showToast("Party Created Successfully", "success");
             document.getElementById("partyName").value = "";
-            loadParties();
+            loadParties(true);
         } else {
             showToast("Error: " + data.detail, "error");
         }
@@ -450,7 +484,7 @@ async function loadLedgerReport() {
     if (end) params.append("end", end);
     if (start || end) url += `?${params.toString()}`;
 
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     const data = await res.json();
 
     const tbody = document.getElementById("ledgerBody");
@@ -524,10 +558,14 @@ let editingTransactionId = null;
 
 async function openEditModal(id) {
     try {
-        // Fetch the transaction details
-        const res = await fetch(`http://127.0.0.1:8000/transactions?page=1&limit=1000`);
-        const response = await res.json();
-        const txn = response.transactions.find(t => t.id == id);
+        // Try cached transactions first
+        let txn = currentTransactionsCache.find(t => t.id == id);
+
+        // Fallback: use efficient single transaction endpoint
+        if (!txn) {
+            const res = await fetchWithTimeout(`http://127.0.0.1:8000/transaction/${id}`);
+            txn = await res.json();
+        }
         
         if (!txn) {
             showToast('Transaction not found', 'error');
@@ -549,15 +587,16 @@ async function openEditModal(id) {
         document.getElementById('newMode').value = txn.mode;
         document.getElementById('newAmount').value = txn.amount;
         
-        // Show edit indicator banner
+        // Show edit indicator banner with visual feedback
         let editBanner = document.getElementById('editModeBanner');
         if (!editBanner) {
             editBanner = document.createElement('div');
             editBanner.id = 'editModeBanner';
-            editBanner.style.cssText = 'background: linear-gradient(135deg, #000000, rgb(12, 12, 11)); color: white; padding: 12px 16px; margin: 12px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-weight: 500;';
+            editBanner.style.cssText = 'background: linear-gradient(135deg, #7C3AED, #A855F7); color: white; padding: 12px 16px; margin: 12px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-weight: 500; box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);';
             
             const textSpan = document.createElement('span');
-            textSpan.innerHTML = '✏️ Editing Transaction - Press Enter in Amount to Update';
+            textSpan.id = 'editBannerText';
+            textSpan.innerHTML = `✏️ Editing Transaction #${id} - Press Ctrl+S to Save or Enter`;
             editBanner.appendChild(textSpan);
             
             const cancelBtn = document.createElement('button');
@@ -570,13 +609,15 @@ async function openEditModal(id) {
             if (entryCard && entryCard.parentNode) {
                 entryCard.parentNode.insertBefore(editBanner, entryCard);
             }
+        } else {
+            document.getElementById('editBannerText').innerHTML = `✏️ Editing Transaction #${id} - Press Ctrl+S to Save or Enter`;
         }
         editBanner.style.display = 'flex';
         
         // Focus on the first field
         document.getElementById('newDate').focus();
         
-        showToast('✏️ Editing transaction - Modify and press Enter in Amount', 'info');
+        showToast(`📝 Editing #${id} - Ctrl+S to Save or press Enter in Amount`, 'info');
     } catch (e) {
         showToast('Error loading transaction: ' + e, 'error');
     }
@@ -587,7 +628,7 @@ function cancelEdit() {
     
     // Reset form
     document.getElementById('newBill').value = '';
-    document.getElementById('newParty').value = '';
+    document.getElementById('newParty').value = 'Customer';
     document.getElementById('newAmount').value = '';
     document.getElementById('newType').value = 'Sale';
     document.getElementById('newMode').value = 'Credit';
@@ -665,7 +706,6 @@ function closeEditModal() {
         void appContent.offsetHeight;
     }
     
-    console.log('closeEditModal: Modal fully closed');
 }
 
 function ensureAppInteractive() {
@@ -794,7 +834,6 @@ function showConfirmDelete(id) {
 async function deleteTransaction(id) {
     // Prevent concurrent deletes
     if (isDeleting) {
-        console.log('Delete already in progress, ignoring...');
         return;
     }
     
@@ -872,7 +911,6 @@ function unlockUiAfterModal() {
 }
 
 function reactivateInputs() {
-    console.log('Reactivating inputs...');
     unlockUiAfterModal();
     
     // 1. Force parent container reset
@@ -921,95 +959,125 @@ function reactivateInputs() {
         const firstInput = document.getElementById('newBill');
         if (firstInput) {
             firstInput.focus();
-            console.log('Input reactivation complete, focused:', document.activeElement.id);
         }
     }, 50);
 }
 
 // Charts Logic
 function renderCharts(data) {
-    const ctxSales = document.getElementById('salesChart').getContext('2d');
-    const ctxExps = document.getElementById('expenseChart').getContext('2d');
+    const salesCanvas = document.getElementById('salesChart');
+    const expenseCanvas = document.getElementById('expenseChart');
+    if (!salesCanvas || !expenseCanvas) return;
+
+    const ctxSales = salesCanvas.getContext('2d');
+    const ctxExps = expenseCanvas.getContext('2d');
 
     Chart.defaults.font.family = 'Google Sans, Inter, sans-serif';
     Chart.defaults.font.size = 12;
     Chart.defaults.color = '#6B7280';
 
-    // Destroy old instances
-    if (salesChartInstance) salesChartInstance.destroy();
-    if (expenseChartInstance) expenseChartInstance.destroy();
+    if (salesChartInstance) {
+        salesChartInstance.data.datasets[0].data = [data.sales_today, data.sales_month];
+        salesChartInstance.update();
+    } else {
+        const salesGradient = ctxSales.createLinearGradient(0, 0, 0, 400);
+        salesGradient.addColorStop(0, '#4F46E5'); // Deep Indigo
+        salesGradient.addColorStop(1, '#818CF8'); // Light Indigo
 
-    // Create Gradients
-    const salesGradient = ctxSales.createLinearGradient(0, 0, 0, 400);
-    salesGradient.addColorStop(0, '#4F46E5'); // Deep Indigo
-    salesGradient.addColorStop(1, '#818CF8'); // Light Indigo
-
-    salesChartInstance = new Chart(ctxSales, {
-        type: 'bar',
-        data: {
-            labels: ['Today', 'This Month'],
-            datasets: [{
-                label: 'Sales',
-                data: [data.sales_today, data.sales_month],
-                backgroundColor: salesGradient,
-                borderRadius: 8,
-                barPercentage: 0.6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: { beginAtZero: true, grid: { color: '#F3F4F6' } },
-                x: { grid: { display: false } }
+        salesChartInstance = new Chart(ctxSales, {
+            type: 'bar',
+            data: {
+                labels: ['Today', 'This Month'],
+                datasets: [{
+                    label: 'Sales',
+                    data: [data.sales_today, data.sales_month],
+                    backgroundColor: salesGradient,
+                    borderRadius: 8,
+                    barPercentage: 0.6
+                }]
             },
-            plugins: { legend: { display: false } }
-        }
-    });
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, grid: { color: '#F3F4F6' } },
+                    x: { grid: { display: false } }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
 
-    const expensesGradient = ctxExps.createLinearGradient(0, 0, 0, 400);
-    expensesGradient.addColorStop(0, '#10B981'); // Emerald
-    expensesGradient.addColorStop(1, '#34D399');
+    if (expenseChartInstance) {
+        expenseChartInstance.data.datasets[0].data = [data.cash_balance, data.bank_balance];
+        expenseChartInstance.update();
+    } else {
+        const expensesGradient = ctxExps.createLinearGradient(0, 0, 0, 400);
+        expensesGradient.addColorStop(0, '#10B981'); // Emerald
+        expensesGradient.addColorStop(1, '#34D399');
 
-    expenseChartInstance = new Chart(ctxExps, {
-        type: 'doughnut',
-        data: {
-            labels: ['Cash', 'Bank'],
-            datasets: [{
-                data: [data.cash_balance, data.bank_balance],
-                backgroundColor: [expensesGradient, '#F59E0B'],
-                borderWidth: 0,
-                hoverOffset: 12
-            }]
-        },
-        options: {
-            responsive: true,
-            cutout: '70%',
-            plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } } }
-        }
-    });
+        expenseChartInstance = new Chart(ctxExps, {
+            type: 'doughnut',
+            data: {
+                labels: ['Cash', 'Bank'],
+                datasets: [{
+                    data: [data.cash_balance, data.bank_balance],
+                    backgroundColor: [expensesGradient, '#F59E0B'],
+                    borderWidth: 0,
+                    hoverOffset: 12
+                }]
+            },
+            options: {
+                responsive: true,
+                cutout: '70%',
+                plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } } }
+            }
+        });
+    }
 }
 
 async function showDashboard() {
     showView('dashboardView');
-    const res = await fetch("http://127.0.0.1:8000/report/dashboard");
-    const data = await res.json();
+    showSkeletonLoaders(true);
+    
+    try {
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/report/dashboard", {}, 5000);
+        const data = await res.json();
 
-    document.getElementById("dashSalesToday").innerText = data.sales_today.toFixed(2);
-    document.getElementById("dashSalesMonth").innerText = data.sales_month.toFixed(2);
-    document.getElementById("dashCash").innerText = data.cash_balance.toFixed(2);
-    document.getElementById("dashBank").innerText = data.bank_balance.toFixed(2);
-    document.getElementById("dashReceivables").innerText = data.receivables.toFixed(2);
-    const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
-    const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
-    const totalFundsEl = document.getElementById("dashTotalFunds");
-    const cashRatioEl = document.getElementById("dashCashRatio");
-    if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
-    if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
+        document.getElementById("dashSalesToday").innerText = data.sales_today.toFixed(2);
+        document.getElementById("dashSalesMonth").innerText = data.sales_month.toFixed(2);
+        document.getElementById("dashCash").innerText = data.cash_balance.toFixed(2);
+        document.getElementById("dashBank").innerText = data.bank_balance.toFixed(2);
+        document.getElementById("dashReceivables").innerText = data.receivables.toFixed(2);
+        const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
+        const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
+        const totalFundsEl = document.getElementById("dashTotalFunds");
+        const cashRatioEl = document.getElementById("dashCashRatio");
+        if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
+        if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
 
-    // Call Chart Render
-    renderCharts(data);
-    updateSystemStatus(true);
+        renderCharts(data);
+        updateSystemStatus(true);
+        showSkeletonLoaders(false);
+    } catch (error) {
+        showSkeletonLoaders(false);
+        if (error.name !== 'AbortError') {
+            showToast('Connection error: ' + error.message + '. Retrying...', 'error');
+        } else {
+            showToast('Dashboard request timed out. Retrying...', 'error');
+        }
+        updateSystemStatus(false);
+        setTimeout(() => showDashboard(), 2000);
+    }
+}
+
+
+
+function showSkeletonLoaders(show = true) {
+    const loaders = document.querySelectorAll('.skeleton-loader');
+    loaders.forEach(loader => {
+        loader.style.display = show ? 'block' : 'none';
+    });
 }
 
 function isViewActive(viewId) {
@@ -1019,7 +1087,7 @@ function isViewActive(viewId) {
 
 async function updateDashboard() {
     try {
-        const res = await fetch("http://127.0.0.1:8000/report/dashboard");
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/report/dashboard");
         const data = await res.json();
 
         const salesToday = document.getElementById("dashSalesToday");
@@ -1047,7 +1115,6 @@ async function updateDashboard() {
         }
         updateSystemStatus(true);
     } catch (e) {
-        console.error('updateDashboard failed:', e);
         updateSystemStatus(false);
     }
 }
@@ -1229,7 +1296,7 @@ async function checkBackendStatus() {
 // Other Reports (Keeping existing logic mostly same but adding Error Handling)
 async function showDailySummary() {
     showView('dailySummaryView');
-    const res = await fetch("http://127.0.0.1:8000/report/daily-summary");
+    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/daily-summary");
     const data = await res.json();
     const tbody = document.getElementById("dailySummaryBody");
     tbody.innerHTML = "";
@@ -1279,7 +1346,7 @@ async function loadDayBook() {
     if (!date) return showToast('Select a date', 'error');
 
     try {
-        const res = await fetch(`http://127.0.0.1:8000/transactions/by-date?date=${encodeURIComponent(date)}`);
+        const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions/by-date?date=${encodeURIComponent(date)}`);
         if (res.status === 404) {
             await loadDayBookFallback(date);
             return;
@@ -1302,7 +1369,7 @@ async function loadDayBookFallback(date) {
     const results = [];
 
     while (page <= totalPages) {
-        const res = await fetch(`http://127.0.0.1:8000/transactions?page=${page}&limit=${limit}`);
+        const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions?page=${page}&limit=${limit}`);
         const response = await res.json();
         const rows = response.transactions || [];
         totalPages = response.total_pages || 1;
@@ -1344,7 +1411,7 @@ function exportDayBook() {
 
 async function showShortReport() {
     showView('shortReportView');
-    const res = await fetch("http://127.0.0.1:8000/report/short-excess");
+    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/short-excess");
     const data = await res.json();
     const tbody = document.getElementById("shortReportBody");
     const summaryDiv = document.getElementById("shortReportSummary");
@@ -1465,7 +1532,7 @@ async function saveCashInHand(dateStr) {
 async function showModeReport(mode) {
     showView('modeReportView');
     document.getElementById("modeTitle").innerText = `${mode} Ledger`;
-    const res = await fetch(`http://127.0.0.1:8000/report/mode/${mode}`);
+    const res = await fetchWithTimeout(`http://127.0.0.1:8000/report/mode/${mode}`);
     const data = await res.json();
     const tbody = document.getElementById("modeReportBody");
     tbody.innerHTML = "";
@@ -1476,7 +1543,7 @@ async function showModeReport(mode) {
 
 async function showExpenseReport() {
     showView('expenseReportView');
-    const res = await fetch("http://127.0.0.1:8000/report/type/Expense");
+    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/type/Expense");
     const data = await res.json();
     const tbody = document.getElementById("expenseReportBody");
     tbody.innerHTML = "";
@@ -1487,7 +1554,7 @@ async function showExpenseReport() {
 
 async function showOutstanding() {
     showView('outstandingView');
-    const res = await fetch("http://127.0.0.1:8000/report/outstanding");
+    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/outstanding");
     const result = await res.json();
     const tbody = document.getElementById("outstandingBody");
     const totalSpan = document.getElementById("totalOutstanding");
@@ -1502,7 +1569,7 @@ async function showOutstanding() {
 
 async function showTrialBalance() {
     showView('trialBalanceView');
-    const res = await fetch("http://127.0.0.1:8000/report/trial-balance");
+    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/trial-balance");
     const data = await res.json();
     const tbody = document.getElementById("trialBalanceBody");
     tbody.innerHTML = "";
@@ -1516,7 +1583,7 @@ async function showTrialBalance() {
 
 async function showPnL() {
     showView('pnlView');
-    const res = await fetch("http://127.0.0.1:8000/report/pnl");
+    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/pnl");
     const data = await res.json();
     document.getElementById("pnlSales").innerText = data.sales.toFixed(2);
     document.getElementById("pnlExpenses").innerText = data.expenses.toFixed(2);
@@ -1576,7 +1643,7 @@ async function restoreDB() {
     if (!path) return;
     if (!confirm("WARNING: This will overwrite the current database. Continue?")) return;
     try {
-        const res = await fetch(`http://127.0.0.1:8000/restore?path=${encodeURIComponent(path)}`, { method: "POST" });
+        const res = await fetchWithTimeout(`http://127.0.0.1:8000/restore?path=${encodeURIComponent(path)}`, { method: "POST" });
         const data = await res.json();
         if (data.status === "Restore Successful") {
             showToast("Restore Successful. Restarting...", "success");
@@ -1663,7 +1730,7 @@ async function importData() {
             
             // Reload transactions
             loadTransactions();
-            loadParties();
+            loadParties(true);
         } else {
             showToast("Import Failed: " + data.detail, "error");
         }
@@ -1755,6 +1822,13 @@ function exportLedger() {
 
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
+    // Ctrl+S or Cmd+S: Save transaction edit
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (editingTransactionId) {
+            saveEntry();
+        }
+    }
     // Alt + N: New Entry (Focus Date)
     if (e.altKey && e.key === 'n') {
         e.preventDefault();
@@ -1839,7 +1913,7 @@ async function loadCompanies(retries = 5) {
         select.innerHTML = '<option value="">Loading companies...</option>';
     }
     try {
-        const res = await fetch('http://127.0.0.1:8000/companies');
+        const res = await fetchWithTimeout('http://127.0.0.1:8000/companies');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         select.innerHTML = '';
@@ -2013,7 +2087,7 @@ function updatePermissions() {
 
 async function loadOpeningCashSeed() {
     try {
-        const res = await fetch("http://127.0.0.1:8000/settings/opening-cash");
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/settings/opening-cash");
         const data = await res.json();
         const inp = document.getElementById("openingCashSeed");
         if (inp) inp.value = data.opening_cash ?? 0;
@@ -2071,7 +2145,7 @@ async function renameParty() {
         const data = await res.json();
         if (data.status === "Renamed Successfully") {
             showToast("Party Renamed!", "success");
-            loadParties(); // Refresh lists
+            loadParties(true); // Refresh lists
             document.getElementById('renameOldName').value = '';
             document.getElementById('renameNewName').value = '';
         } else {
@@ -2109,7 +2183,7 @@ async function loadUsers() {
     const tbody = document.getElementById('usersTableBody');
     tbody.innerHTML = 'Loading...';
     try {
-        const res = await fetch('http://127.0.0.1:8000/users');
+        const res = await fetchWithTimeout('http://127.0.0.1:8000/users');
         const users = await res.json();
         tbody.innerHTML = '';
         users.forEach(u => {
@@ -2166,7 +2240,7 @@ function showAuditLogs() {
 async function loadAuditLog(targetBodyId = 'auditTableBody') {
     const tbody = document.getElementById(targetBodyId);
     try {
-        const res = await fetch('http://127.0.0.1:8000/audit');
+        const res = await fetchWithTimeout('http://127.0.0.1:8000/audit');
         const logs = await res.json();
         tbody.innerHTML = '';
         logs.forEach(l => {
@@ -2178,7 +2252,7 @@ async function loadAuditLog(targetBodyId = 'auditTableBody') {
                 <td>${l.details}</td>
             </tr>`;
         });
-    } catch (e) { console.error(e); }
+    } catch (e) { showToast("Error: " + e.message, "error"); }
 }
 
 // Database Configuration Functions (continued)
@@ -2196,7 +2270,7 @@ async function loadDbConfig() {
         document.getElementById('cfgBackupDir').value = config.backup_dir || '';
         toggleSqlAuth();
     } catch (e) {
-        console.error('Backend not available, using defaults:', e);
+        showToast("Backend not available, using defaults", "warning");
         // Load defaults when backend is not running
         const localCfg = await loadClientConfig();
         document.getElementById('cfgServer').value = 'localhost';
@@ -2295,7 +2369,7 @@ async function saveDbConfig() {
             apiBase = normalizeApiBase(config.api_base);
         }
     } catch (e) {
-        console.error('Failed to save client config:', e);
+        showToast("Failed to save configuration: " + e.message, "error");
     }
     
     try {
