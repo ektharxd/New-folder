@@ -1,7 +1,7 @@
 {
   "name": "m-finlogs",
   "productName": "M-Finlogs",
-  "version": "1.0.0",
+  "version": "0.1.3-gamma.1",
   "description": "Accounting Software for M-Finlogs",
   "main": "main.js",
   "scripts": {
@@ -11,6 +11,13 @@
   "build": {
     "appId": "com.mfinlogs.app",
     "productName": "M-Finlogs",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ektharxd",
+        "repo": "M-Finlogs"
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "assets/finlogs.ico"
@@ -27,6 +34,8 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "exceljs": "^4.4.0",
+    "electron-updater": "^6.3.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

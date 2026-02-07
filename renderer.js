@@ -1,5 +1,5 @@
 const { ipcRenderer } = require('electron');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 // Global cache for party types
 const partyTypes = {};
@@ -56,13 +56,12 @@ window.fetch = (url, options) => {
 
 // Database Configuration Functions - defined early for inline handlers
 function showDbConfig() {
-    console.log('showDbConfig called');
     const modal = document.getElementById('dbConfigModal');
     if (modal) {
         modal.style.display = 'flex';
         loadDbConfig();
     } else {
-        console.error('dbConfigModal not found');
+        showToast('Configuration modal not found', 'error');
     }
 }
 
@@ -91,11 +90,52 @@ window.installServerMode = installServerMode;
 window.uninstallServerMode = uninstallServerMode;
 window.restartBackend = restartBackend;
 window.stopBackend = stopBackend;
+window.runAutoBackupNow = runAutoBackupNow;
+window.openAutoBackupFolder = openAutoBackupFolder;
+window.requestUpdateCheck = requestUpdateCheck;
+window.requestUpdateRestart = requestUpdateRestart;
+window.requestUpdateCheck = requestUpdateCheck;
 
-async function loadParties() {
+const PARTY_CACHE_TTL_MS = 5 * 60 * 1000;
+let partyCache = { data: null, ts: 0 };
+const REPORT_TIMEOUT_MS = 20000;
+
+// Centralized fetch wrapper with timeout and error handling
+async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
     try {
-        const res = await fetch("http://127.0.0.1:8000/parties");
-        const data = await res.json();
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response;
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            throw new Error('Request timeout - server not responding');
+        }
+        throw error;
+    }
+}
+
+function fetchReport(url) {
+    return fetchWithTimeout(url, {}, REPORT_TIMEOUT_MS);
+}
+
+async function loadParties(force = false) {
+    try {
+        const now = Date.now();
+        let data = partyCache.data;
+
+        if (!force && data && (now - partyCache.ts) < PARTY_CACHE_TTL_MS) {
+            // Use cached parties
+        } else {
+            const res = await fetchWithTimeout("http://127.0.0.1:8000/parties");
+            data = await res.json();
+            partyCache = { data, ts: now };
+        }
 
         const datalist = document.getElementById("partyList");
         const reportDrop = document.getElementById("reportParty");
@@ -122,16 +162,221 @@ async function loadParties() {
 
 let currentTxnPage = 1;
 let totalTxnPages = 1;
-const appStartTime = Date.now();
+let appStartTime = Date.now();
+let currentTransactionsCache = [];
+let txnRangeDays = 30; // default to last 30 days for faster initial load
+const TXN_CACHE_TTL_MS = 60 * 1000;
+let txnPageCache = { key: null, ts: 0, data: null };
+let allTransactions = [];
+const TXN_ROW_HEIGHT = 36;
+const TXN_OVERSCAN = 8;
+let txnVirtualInitialized = false;
+const TXN_HIGHLIGHT_TTL_MS = 24 * 60 * 60 * 1000;
+let txnHighlightMap = null;
+let editContext = null;
 // Guard flag to prevent concurrent loadTransactions calls
 // Multiple rapid calls cause DOM thrashing -> input fields freeze
 // Fixed: Only one loadTransactions can run at a time
 let isLoadingTransactions = false;
 
-async function loadTransactions(page = 1) {
-    // Prevent concurrent calls that cause DOM thrashing
+function initTxnVirtualScroll() {
+    if (txnVirtualInitialized) return;
+    const container = document.getElementById('txnTableContainer');
+    if (!container) return;
+    txnVirtualInitialized = true;
+    let ticking = false;
+    container.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+            renderVirtualizedTransactions();
+            ticking = false;
+        });
+    });
+}
+
+function loadTxnHighlights() {
+    if (txnHighlightMap) return txnHighlightMap;
+    try {
+        txnHighlightMap = JSON.parse(localStorage.getItem('txnHighlights') || '{}') || {};
+    } catch (e) {
+        txnHighlightMap = {};
+    }
+    return txnHighlightMap;
+}
+
+function saveTxnHighlights() {
+    if (!txnHighlightMap) return;
+    localStorage.setItem('txnHighlights', JSON.stringify(txnHighlightMap));
+}
+
+function pruneTxnHighlights() {
+    const map = loadTxnHighlights();
+    const now = Date.now();
+    let changed = false;
+    Object.keys(map).forEach((key) => {
+        if (!map[key] || (now - map[key].ts) > TXN_HIGHLIGHT_TTL_MS) {
+            delete map[key];
+            changed = true;
+        }
+    });
+    if (changed) saveTxnHighlights();
+}
+
+function markTxnHighlight(id, type) {
+    if (!id) return;
+    const map = loadTxnHighlights();
+    map[String(id)] = { type, ts: Date.now() };
+    saveTxnHighlights();
+}
+
+function getTxnHighlightClass(id) {
+    if (!id) return '';
+    const map = loadTxnHighlights();
+    const entry = map[String(id)];
+    if (!entry) return '';
+    if ((Date.now() - entry.ts) > TXN_HIGHLIGHT_TTL_MS) {
+        delete map[String(id)];
+        saveTxnHighlights();
+        return '';
+    }
+    return entry.type === 'edited' ? 'row-edited' : entry.type === 'deleted' ? 'row-deleted' : '';
+}
+
+function captureEditContext() {
+    const activeView = document.querySelector('.view-section.active');
+    const viewId = activeView ? activeView.id : 'entryView';
+    const txnContainer = document.getElementById('txnTableContainer');
+    const dayBookContainer = document.getElementById('dayBookTableContainer');
+    editContext = {
+        viewId,
+        txnScrollTop: txnContainer ? txnContainer.scrollTop : 0,
+        dayBookScrollTop: dayBookContainer ? dayBookContainer.scrollTop : 0
+    };
+}
+
+function restoreEditContext() {
+    if (!editContext) return;
+    const { viewId, txnScrollTop, dayBookScrollTop } = editContext;
+    editContext = null;
+
+    if (viewId === 'entryView') {
+        const container = document.getElementById('txnTableContainer');
+        if (container) container.scrollTop = txnScrollTop;
+        return;
+    }
+
+    if (viewId === 'dayBookView') {
+        showView('dayBookView', { skipLoad: true });
+        const nav = document.querySelector('a[onclick*="showDayBook"]');
+        if (nav) activateNav(nav);
+        refreshDayBookIfNeeded();
+        const container = document.getElementById('dayBookTableContainer');
+        if (container) container.scrollTop = dayBookScrollTop;
+        return;
+    }
+
+    if (viewId === 'ledgerView') {
+        showView('ledgerView', { skipLoad: true });
+        const nav = document.querySelector('a[onclick*="ledgerView"]');
+        if (nav) activateNav(nav);
+        loadLedgerReport();
+        return;
+    }
+
+    showView(viewId, { skipLoad: true });
+    const nav = document.querySelector(`a[onclick*="${viewId}"]`);
+    if (nav) activateNav(nav);
+}
+
+function renderVirtualizedTransactions(resetScroll = false) {
+    const container = document.getElementById('txnTableContainer');
+    const tbody = document.getElementById('transactionList');
+    if (!container || !tbody) return;
+
+    if (resetScroll) {
+        container.scrollTop = 0;
+    }
+
+    const data = allTransactions || [];
+    const total = data.length;
+    const containerHeight = container.clientHeight || 520;
+    const scrollTop = container.scrollTop || 0;
+
+    const start = Math.max(0, Math.floor(scrollTop / TXN_ROW_HEIGHT) - TXN_OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / TXN_ROW_HEIGHT) + TXN_OVERSCAN * 2;
+    const end = Math.min(total, start + visibleCount);
+
+    const topPad = start * TXN_ROW_HEIGHT;
+    const bottomPad = Math.max(0, (total - end) * TXN_ROW_HEIGHT);
+    const colspan = currentRole === 'admin' ? 7 : 6;
+
+    let rowsHTML = '';
+    if (topPad > 0) {
+        rowsHTML += `<tr class="txn-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    pruneTxnHighlights();
+    for (let i = start; i < end; i += 1) {
+        const txn = data[i];
+        const rowClass = getTxnHighlightClass(txn.id);
+        let actionCell = "";
+        if (currentRole === 'admin') {
+            actionCell = `<td class="action-cell">
+                <button class="btn-action edit" onclick="openEditModal('${txn.id}')" title="Edit">
+                    <ion-icon name="create-outline"></ion-icon>
+                    <span>Edit</span>
+                </button>
+                <button class="btn-action delete" onclick="if(!window.isDeleting) deleteTransaction('${txn.id}')" title="Delete">
+                    <ion-icon name="trash-outline"></ion-icon>
+                    <span>Del</span>
+                </button>
+            </td>`;
+        }
+
+        rowsHTML += `
+        <tr${rowClass ? ` class="${rowClass}"` : ''}>
+            <td>${formatDateShort(txn.date)}</td>
+            <td>${txn.bill_no || ''}</td>
+            <td>${txn.party}</td>
+            <td>${txn.type}</td>
+            <td>${txn.mode}</td>
+            <td>${formatMoney(txn.amount)}</td>
+            ${actionCell}
+        </tr>`;
+    }
+
+    if (bottomPad > 0) {
+        rowsHTML += `<tr class="txn-spacer"><td colspan="${colspan}" style="height:${bottomPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    tbody.innerHTML = rowsHTML;
+}
+
+function invalidateTxnCache() {
+    txnPageCache = { key: null, ts: 0, data: null };
+}
+
+function updateTxnRangeUI() {
+    const btn = document.getElementById('txnRangeToggleBtn');
+    if (!btn) return;
+    if (txnRangeDays && txnRangeDays > 0) {
+        btn.textContent = 'Last 30 Days';
+    } else {
+        btn.textContent = 'All Transactions';
+    }
+}
+
+function toggleTxnRange() {
+    txnRangeDays = (txnRangeDays && txnRangeDays > 0) ? 0 : 30;
+    txnPageCache = { key: null, ts: 0, data: null };
+    updateTxnRangeUI();
+    loadTransactions(1);
+}
+
+async function loadTransactions(page = 1, force = false, options = {}) {
+    const { resetScroll = true } = options;
     if (isLoadingTransactions) {
-        console.log('loadTransactions: already loading, skipping...');
         return;
     }
     
@@ -143,27 +388,42 @@ async function loadTransactions(page = 1) {
             return;
         }
         
-        console.time('loadTransactions-total');
-        console.time('loadTransactions-fetch');
-        const res = await fetch(`http://127.0.0.1:8000/transactions?page=${page}&limit=100`);
-        const response = await res.json();
+        const rangeParam = (txnRangeDays && txnRangeDays > 0) ? `&days=${txnRangeDays}` : '';
+        const cacheKey = `page=${page}&limit=50${rangeParam}`;
+        let response = null;
+
+        if (!force && page === 1 && txnPageCache.key === cacheKey && (Date.now() - txnPageCache.ts) < TXN_CACHE_TTL_MS) {
+            response = txnPageCache.data;
+        } else {
+            const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions?${cacheKey}`);
+            response = await res.json();
+            if (page === 1) {
+                txnPageCache = { key: cacheKey, ts: Date.now(), data: response };
+            }
+        }
         
         // Validate response format
         if (!response || !response.transactions) {
-            console.error('Invalid response format:', response);
             showToast("Error: Invalid server response", "error");
             return;
         }
         
         const data = response.transactions;
+        currentTransactionsCache = data;
         currentTxnPage = response.page || 1;
         totalTxnPages = response.total_pages || 1;
-        console.timeEnd('loadTransactions-fetch');
-        console.log('Transaction count:', data.length);
 
-        console.time('loadTransactions-render');
-        const tbody = document.getElementById("transactionList");
-        
+        // Ensure latest-first: date desc, then bill desc
+        const sortedData = [...data].sort((a, b) => {
+            const da = new Date(a.date || 0).getTime();
+            const db = new Date(b.date || 0).getTime();
+            if (da !== db) return db - da;
+            const ba = getBillSortValue(a.bill_no);
+            const bb = getBillSortValue(b.bill_no);
+            if (ba !== bb) return bb - ba;
+            return String(b.bill_no || '').localeCompare(String(a.bill_no || ''));
+        });
+
         // Admin Edit Column Header (Recent Transactions Table)
         const headerRow = document.querySelector('#recentTxnTable thead tr');
         if (headerRow) {
@@ -178,53 +438,33 @@ async function loadTransactions(page = 1) {
             }
         }
 
-        // Build HTML string first, then set once - MUCH faster
-        let rowsHTML = "";
-        data.forEach(txn => {
-            let actionCell = "";
-            if (currentRole === 'admin') {
-                actionCell = `<td class="action-cell">
-                    <button class="btn-action edit" onclick="openEditModal('${txn.id}')" title="Edit">
-                        <ion-icon name="create-outline"></ion-icon>
-                        <span>Edit</span>
-                    </button>
-                    <button class="btn-action delete" onclick="if(!window.isDeleting) deleteTransaction('${txn.id}')" title="Delete">
-                        <ion-icon name="trash-outline"></ion-icon>
-                        <span>Del</span>
-                    </button>
-                </td>`;
-            }
-
-            rowsHTML += `
-            <tr>
-                <td>${formatDateShort(txn.date)}</td>
-                <td>${txn.bill_no || ''}</td>
-                <td>${txn.party}</td>
-                <td>${txn.type}</td>
-                <td>${txn.mode}</td>
-                <td>${txn.amount.toFixed(2)}</td>
-                ${actionCell}
-            </tr>`;
-        });
-        
-        // Set innerHTML once instead of 500 times
-        tbody.innerHTML = rowsHTML;
-        console.timeEnd('loadTransactions-render');
+        allTransactions = sortedData;
+        initTxnVirtualScroll();
+        const container = document.getElementById('txnTableContainer');
+        const prevScrollTop = container ? container.scrollTop : 0;
+        renderVirtualizedTransactions(resetScroll);
+        if (!resetScroll && container) {
+            container.scrollTop = prevScrollTop;
+        }
 
         // Set default date if not set
         const dateInput = document.getElementById("newDate");
         if (!dateInput.value) {
             dateInput.valueAsDate = new Date();
         }
-        console.timeEnd('loadTransactions-total');
         
         // Update pagination controls
         const pageInfo = document.getElementById('txnPageInfo');
         const currentPageDisplay = document.getElementById('currentPageDisplay');
         const prevBtn = document.getElementById('prevPageBtn');
         const nextBtn = document.getElementById('nextPageBtn');
+
+        updateTxnRangeUI();
         
-        if (pageInfo) pageInfo.textContent = `(${response.total} entries)`;
+        if (pageInfo) {
+            const rangeLabel = (txnRangeDays && txnRangeDays > 0) ? `Last ${txnRangeDays} days` : 'All time';
+            pageInfo.textContent = `(${response.total} entries • ${rangeLabel})`;
+        }
         if (currentPageDisplay) currentPageDisplay.textContent = `Page ${currentTxnPage} of ${totalTxnPages}`;
         if (prevBtn) prevBtn.disabled = currentTxnPage <= 1;
         if (nextBtn) nextBtn.disabled = currentTxnPage >= totalTxnPages;
@@ -239,7 +479,6 @@ async function loadTransactions(page = 1) {
             void appContent.offsetHeight;
         }
     } catch (e) {
-        console.timeEnd('loadTransactions-total');
         showToast("Error loading transactions: " + e, "error");
     } finally {
         isLoadingTransactions = false;
@@ -271,6 +510,12 @@ function incrementBillNumber(billNo) {
     return prefix + paddedNumber;
 }
 
+function getBillSortValue(billNo) {
+    const str = (billNo || '').toString().trim();
+    const match = str.match(/(\d+)(?!.*\d)/);
+    return match ? parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+}
+
 async function saveEntry() {
     const date = document.getElementById("newDate").value;
     const bill = document.getElementById("newBill").value;
@@ -280,6 +525,18 @@ async function saveEntry() {
     const mode = document.getElementById("newMode").value;
     const amount = document.getElementById("newAmount").value;
     const isStrict = document.getElementById("strictPartyMode").checked;
+        // Validate amount
+        if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
+            showToast("Amount must be greater than 0", "error");
+            document.getElementById("newAmount").focus();
+            return;
+        }
+    
+    // Check if we're in edit mode
+    if (editingTransactionId) {
+        await updateTransaction(editingTransactionId, date, bill, party, type, mode, amount);
+        return;
+    }
 
     if (!date || !amount || !type || !mode || !party) {
         showToast("All fields (Date, Party, Type, Mode, Amount) are mandatory.", "error");
@@ -318,9 +575,12 @@ async function saveEntry() {
                 if (!pType) return;
 
                 const isCredit = pType === "Credit Customer";
-                await fetch(`http://127.0.0.1:8000/party?name=${party}&ptype=${pType}&credit=${isCredit}`, { method: "POST" });
-                // Reload to update cache
-                await loadParties();
+                await fetchWithTimeout("http://127.0.0.1:8000/party", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: party, ptype: pType, credit: isCredit })
+                });
+                await loadParties(true);
             } else {
                 return;
             }
@@ -333,17 +593,14 @@ async function saveEntry() {
     const url = `http://127.0.0.1:8000/transaction?date=${date}&bill_no=${bill}&party=${partyParam}&txn_type=${type}&mode=${mode}&amount=${amount}`;
 
     try {
-        console.time('saveEntry-POST');
-        const res = await fetch(url, { method: "POST" });
+        const res = await fetchWithTimeout(url, { method: "POST" });
         const data = await res.json();
-        console.timeEnd('saveEntry-POST');
 
         const statusText = (data.status || "").toString().trim().toLowerCase();
         if (statusText.includes("added") || statusText.includes("saved") || statusText.includes("success")) {
             showToast("Entry Saved Successfully!", "success");
-            console.time('saveEntry-reload');
-            await loadTransactions(currentTxnPage);
-            console.timeEnd('saveEntry-reload');
+            invalidateTxnCache();
+            await loadTransactions(currentTxnPage, true);
             
             // Auto-increment bill number
             const currentBill = bill;
@@ -351,7 +608,7 @@ async function saveEntry() {
             
             // Clear inputs
             document.getElementById("newBill").value = nextBill;
-            document.getElementById("newParty").value = "";
+            document.getElementById("newParty").value = "Customer";
             document.getElementById("newAmount").value = "";
             document.getElementById("newType").value = "Sale";
             document.getElementById("newMode").value = "Credit";
@@ -393,12 +650,16 @@ async function createParty() {
     if (!name) return showToast("Enter Party Name", "error");
 
     try {
-        const res = await fetch(`http://127.0.0.1:8000/party?name=${name}&ptype=${type}&credit=${credit}`, { method: "POST" });
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/party", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, ptype: type, credit })
+        });
         const data = await res.json();
         if (data.status === "Party Created") {
             showToast("Party Created Successfully", "success");
             document.getElementById("partyName").value = "";
-            loadParties();
+            loadParties(true);
         } else {
             showToast("Error: " + data.detail, "error");
         }
@@ -408,11 +669,16 @@ async function createParty() {
 }
 
 // View Switching
-function showView(viewId) {
+function showView(viewId, options = {}) {
+    const { skipLoad = false } = options;
     document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
     document.getElementById(viewId).classList.add('active');
     
     // Load data when switching to specific views
+    if (skipLoad) {
+        return;
+    }
+
     if (viewId === 'entryView') {
         loadTransactions();
     } else if (viewId === 'ledgerView') {
@@ -442,7 +708,7 @@ async function loadLedgerReport() {
     if (end) params.append("end", end);
     if (start || end) url += `?${params.toString()}`;
 
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     const data = await res.json();
 
     const tbody = document.getElementById("ledgerBody");
@@ -464,7 +730,9 @@ async function loadLedgerReport() {
 
     let runningBalance = 0;
 
+    pruneTxnHighlights();
     data.forEach(row => {
+        const rowClass = getTxnHighlightClass(row.id);
         let actionCell = "";
         if (currentRole === 'admin') {
             actionCell = `<td class="action-cell">
@@ -484,22 +752,22 @@ async function loadLedgerReport() {
         let debit = '';
         let credit = '';
         if (debitTypes.has(type)) {
-            debit = amt.toFixed(2);
+            debit = formatMoney(amt);
             runningBalance += amt;
         } else if (creditTypes.has(type)) {
-            credit = amt.toFixed(2);
+            credit = formatMoney(amt);
             runningBalance -= amt;
         } else {
-            debit = amt.toFixed(2);
+            debit = formatMoney(amt);
             runningBalance += amt;
         }
 
         const balanceLabel = runningBalance < 0
-            ? `${Math.abs(runningBalance).toFixed(2)} Cr`
-            : `${runningBalance.toFixed(2)} Dr`;
+            ? `${formatMoney(Math.abs(runningBalance))} Cr`
+            : `${formatMoney(runningBalance)} Dr`;
 
         tbody.innerHTML += `
-        <tr>
+        <tr${rowClass ? ` class="${rowClass}"` : ''}>
             <td>${formatDateShort(row.date)}</td>
             <td>${row.bill_no || ''}</td>
             <td>${particulars}</td>
@@ -512,22 +780,139 @@ async function loadLedgerReport() {
 }
 
 // --- Edit Transaction Logic ---
-function openEditModal(id) {
-    const modal = document.getElementById('editTxnModal');
-    if (!modal) return;
+let editingTransactionId = null;
+
+async function openEditModal(id) {
+    try {
+        captureEditContext();
+        // Try cached transactions first
+        let txn = currentTransactionsCache.find(t => t.id == id);
+
+        // Fallback: use efficient single transaction endpoint
+        if (!txn) {
+            const res = await fetchWithTimeout(`http://127.0.0.1:8000/transaction/${id}`);
+            txn = await res.json();
+        }
+        
+        if (!txn) {
+            showToast('Transaction not found', 'error');
+            return;
+        }
+        
+        // Set edit mode
+        editingTransactionId = id;
+        
+        // Switch to entry view
+        showView('entryView', { skipLoad: true });
+        activateNav(document.querySelector('a[onclick*="entryView"]'));
+        
+        // Pre-fill the form with transaction data
+        document.getElementById('newDate').value = txn.date;
+        document.getElementById('newBill').value = txn.bill_no || '';
+        document.getElementById('newParty').value = txn.party;
+        document.getElementById('newType').value = txn.type;
+        document.getElementById('newMode').value = txn.mode;
+        document.getElementById('newAmount').value = txn.amount;
+        
+        // Show edit indicator banner with visual feedback
+        let editBanner = document.getElementById('editModeBanner');
+        if (!editBanner) {
+            editBanner = document.createElement('div');
+            editBanner.id = 'editModeBanner';
+            editBanner.style.cssText = 'background: linear-gradient(135deg, #7C3AED, #A855F7); color: white; padding: 12px 16px; margin: 12px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-weight: 500; box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);';
+            
+            const textSpan = document.createElement('span');
+            textSpan.id = 'editBannerText';
+            textSpan.innerHTML = `✏️ Editing Transaction #${id} - Press Ctrl+S to Save or Enter`;
+            editBanner.appendChild(textSpan);
+            
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = '✖ Cancel Edit';
+            cancelBtn.style.cssText = 'background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 500;';
+            cancelBtn.onclick = cancelEdit;
+            editBanner.appendChild(cancelBtn);
+            
+            const entryCard = document.querySelector('#entryView .card');
+            if (entryCard && entryCard.parentNode) {
+                entryCard.parentNode.insertBefore(editBanner, entryCard);
+            }
+        } else {
+            document.getElementById('editBannerText').innerHTML = `✏️ Editing Transaction #${id} - Press Ctrl+S to Save or Enter`;
+        }
+        editBanner.style.display = 'flex';
+        
+        // Focus on the first field
+        document.getElementById('newDate').focus();
+        
+        showToast(`📝 Editing #${id} - Ctrl+S to Save or press Enter in Amount`, 'info');
+    } catch (e) {
+        showToast('Error loading transaction: ' + e, 'error');
+    }
+}
+
+function cancelEdit() {
+    editingTransactionId = null;
     
-    modal.style.display = 'flex';
-    modal.style.pointerEvents = 'auto';
-    modal.style.visibility = 'visible';
-    modal.style.zIndex = '2000';
+    // Reset form
+    document.getElementById('newBill').value = '';
+    document.getElementById('newParty').value = 'Customer';
+    document.getElementById('newAmount').value = '';
+    document.getElementById('newType').value = 'Sale';
+    document.getElementById('newMode').value = 'Credit';
     
-    document.getElementById('editTxnId').value = id;
-    document.getElementById('editValue').value = '';
+    // Hide edit banner
+    const editBanner = document.getElementById('editModeBanner');
+    if (editBanner) editBanner.style.display = 'none';
     
-    // Ensure modal is fully rendered before focusing input
-    requestAnimationFrame(() => {
-        document.getElementById('editValue').focus();
-    });
+    showToast('Edit cancelled', 'info');
+}
+
+async function updateTransaction(id, date, bill, party, type, mode, amount) {
+    try {
+        // Update each field that changed
+        const updates = [
+            { field: 'txn_date', value: date },
+            { field: 'bill_no', value: bill },
+            { field: 'txn_type', value: type },
+            { field: 'payment_mode', value: mode },
+            { field: 'amount', value: amount }
+        ];
+        
+        for (const update of updates) {
+            const res = await fetch("http://127.0.0.1:8000/transaction/edit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    txn_id: parseInt(id),
+                    admin_user: sessionStorage.getItem("username"),
+                    field: update.field,
+                    new_value: update.value
+                })
+            });
+            
+            const data = await res.json();
+            if (data.status !== "Updated Successfully") {
+                showToast(`Update failed for ${update.field}: ` + data.detail, "error");
+                return;
+            }
+        }
+        
+        showToast("Transaction Updated Successfully!", "success");
+        markTxnHighlight(id, 'edited');
+        
+        // Reset edit mode
+        cancelEdit();
+        
+        // Reload transactions
+        invalidateTxnCache();
+        await loadTransactions(currentTxnPage, true, { resetScroll: false });
+        updateDashboard();
+        refreshDayBookIfNeeded();
+        restoreEditContext();
+        
+    } catch (e) {
+        showToast("Error updating transaction: " + e, "error");
+    }
 }
 
 function closeEditModal() {
@@ -552,7 +937,6 @@ function closeEditModal() {
         void appContent.offsetHeight;
     }
     
-    console.log('closeEditModal: Modal fully closed');
 }
 
 function ensureAppInteractive() {
@@ -628,14 +1012,18 @@ async function submitTxnEdit() {
         const data = await res.json();
         if (data.status === "Updated Successfully") {
             showToast("Transaction Updated", "success");
+            markTxnHighlight(id, 'edited');
             closeEditModal();
             ensureAppInteractive();
             
             // Small delay to let DOM settle before reload
             setTimeout(() => {
                 if (isViewActive('ledgerView')) loadLedgerReport();
-                loadTransactions(currentTxnPage);
+                invalidateTxnCache();
+                loadTransactions(currentTxnPage, true, { resetScroll: false });
                 updateDashboard();
+                refreshDayBookIfNeeded();
+                restoreEditContext();
             }, 50);
         } else {
             showToast("Update Failed: " + data.detail, "error");
@@ -681,9 +1069,10 @@ function showConfirmDelete(id) {
 async function deleteTransaction(id) {
     // Prevent concurrent deletes
     if (isDeleting) {
-        console.log('Delete already in progress, ignoring...');
         return;
     }
+
+    captureEditContext();
     
     // Close edit modal and show confirmation
     closeEditModal();
@@ -694,7 +1083,7 @@ async function performDelete(id) {
     isDeleting = true;
     
     try {
-        const res = await fetch("http://127.0.0.1:8000/transaction/delete", {
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/transaction/delete", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -706,12 +1095,16 @@ async function performDelete(id) {
         const data = await res.json();
         if (data.status === "Deleted Successfully") {
             showToast("Transaction Deleted", "success");
+            markTxnHighlight(id, 'deleted');
             
             // Reload data
             if (isViewActive('ledgerView')) loadLedgerReport();
-            await loadTransactions(currentTxnPage);
+            invalidateTxnCache();
+            await loadTransactions(currentTxnPage, true, { resetScroll: false });
             updateDashboard();
             unlockUiAfterModal();
+            refreshDayBookIfNeeded();
+            restoreEditContext();
             
             // CRITICAL: Completely reset input interactivity
             setTimeout(() => {
@@ -759,7 +1152,6 @@ function unlockUiAfterModal() {
 }
 
 function reactivateInputs() {
-    console.log('Reactivating inputs...');
     unlockUiAfterModal();
     
     // 1. Force parent container reset
@@ -808,95 +1200,125 @@ function reactivateInputs() {
         const firstInput = document.getElementById('newBill');
         if (firstInput) {
             firstInput.focus();
-            console.log('Input reactivation complete, focused:', document.activeElement.id);
         }
     }, 50);
 }
 
 // Charts Logic
 function renderCharts(data) {
-    const ctxSales = document.getElementById('salesChart').getContext('2d');
-    const ctxExps = document.getElementById('expenseChart').getContext('2d');
+    const salesCanvas = document.getElementById('salesChart');
+    const expenseCanvas = document.getElementById('expenseChart');
+    if (!salesCanvas || !expenseCanvas) return;
+
+    const ctxSales = salesCanvas.getContext('2d');
+    const ctxExps = expenseCanvas.getContext('2d');
 
     Chart.defaults.font.family = 'Google Sans, Inter, sans-serif';
     Chart.defaults.font.size = 12;
     Chart.defaults.color = '#6B7280';
 
-    // Destroy old instances
-    if (salesChartInstance) salesChartInstance.destroy();
-    if (expenseChartInstance) expenseChartInstance.destroy();
+    if (salesChartInstance) {
+        salesChartInstance.data.datasets[0].data = [data.sales_today, data.sales_month];
+        salesChartInstance.update();
+    } else {
+        const salesGradient = ctxSales.createLinearGradient(0, 0, 0, 400);
+        salesGradient.addColorStop(0, '#4F46E5'); // Deep Indigo
+        salesGradient.addColorStop(1, '#818CF8'); // Light Indigo
 
-    // Create Gradients
-    const salesGradient = ctxSales.createLinearGradient(0, 0, 0, 400);
-    salesGradient.addColorStop(0, '#4F46E5'); // Deep Indigo
-    salesGradient.addColorStop(1, '#818CF8'); // Light Indigo
-
-    salesChartInstance = new Chart(ctxSales, {
-        type: 'bar',
-        data: {
-            labels: ['Today', 'This Month'],
-            datasets: [{
-                label: 'Sales',
-                data: [data.sales_today, data.sales_month],
-                backgroundColor: salesGradient,
-                borderRadius: 8,
-                barPercentage: 0.6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: { beginAtZero: true, grid: { color: '#F3F4F6' } },
-                x: { grid: { display: false } }
+        salesChartInstance = new Chart(ctxSales, {
+            type: 'bar',
+            data: {
+                labels: ['Today', 'This Month'],
+                datasets: [{
+                    label: 'Sales',
+                    data: [data.sales_today, data.sales_month],
+                    backgroundColor: salesGradient,
+                    borderRadius: 8,
+                    barPercentage: 0.6
+                }]
             },
-            plugins: { legend: { display: false } }
-        }
-    });
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, grid: { color: '#F3F4F6' } },
+                    x: { grid: { display: false } }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
 
-    const expensesGradient = ctxExps.createLinearGradient(0, 0, 0, 400);
-    expensesGradient.addColorStop(0, '#10B981'); // Emerald
-    expensesGradient.addColorStop(1, '#34D399');
+    if (expenseChartInstance) {
+        expenseChartInstance.data.datasets[0].data = [data.cash_balance, data.bank_balance];
+        expenseChartInstance.update();
+    } else {
+        const expensesGradient = ctxExps.createLinearGradient(0, 0, 0, 400);
+        expensesGradient.addColorStop(0, '#10B981'); // Emerald
+        expensesGradient.addColorStop(1, '#34D399');
 
-    expenseChartInstance = new Chart(ctxExps, {
-        type: 'doughnut',
-        data: {
-            labels: ['Cash', 'Bank'],
-            datasets: [{
-                data: [data.cash_balance, data.bank_balance],
-                backgroundColor: [expensesGradient, '#F59E0B'],
-                borderWidth: 0,
-                hoverOffset: 12
-            }]
-        },
-        options: {
-            responsive: true,
-            cutout: '70%',
-            plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } } }
-        }
-    });
+        expenseChartInstance = new Chart(ctxExps, {
+            type: 'doughnut',
+            data: {
+                labels: ['Cash', 'Bank'],
+                datasets: [{
+                    data: [data.cash_balance, data.bank_balance],
+                    backgroundColor: [expensesGradient, '#F59E0B'],
+                    borderWidth: 0,
+                    hoverOffset: 12
+                }]
+            },
+            options: {
+                responsive: true,
+                cutout: '70%',
+                plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } } }
+            }
+        });
+    }
 }
 
 async function showDashboard() {
     showView('dashboardView');
-    const res = await fetch("http://127.0.0.1:8000/report/dashboard");
-    const data = await res.json();
+    showSkeletonLoaders(true);
+    
+    try {
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/report/dashboard", {}, 5000);
+        const data = await res.json();
 
-    document.getElementById("dashSalesToday").innerText = data.sales_today.toFixed(2);
-    document.getElementById("dashSalesMonth").innerText = data.sales_month.toFixed(2);
-    document.getElementById("dashCash").innerText = data.cash_balance.toFixed(2);
-    document.getElementById("dashBank").innerText = data.bank_balance.toFixed(2);
-    document.getElementById("dashReceivables").innerText = data.receivables.toFixed(2);
-    const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
-    const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
-    const totalFundsEl = document.getElementById("dashTotalFunds");
-    const cashRatioEl = document.getElementById("dashCashRatio");
-    if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
-    if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
+        document.getElementById("dashSalesToday").innerText = formatMoney(data.sales_today);
+        document.getElementById("dashSalesMonth").innerText = formatMoney(data.sales_month);
+        document.getElementById("dashCash").innerText = formatMoney(data.cash_balance);
+        document.getElementById("dashBank").innerText = formatMoney(data.bank_balance);
+        document.getElementById("dashReceivables").innerText = formatMoney(data.receivables);
+        const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
+        const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
+        const totalFundsEl = document.getElementById("dashTotalFunds");
+        const cashRatioEl = document.getElementById("dashCashRatio");
+        if (totalFundsEl) totalFundsEl.innerText = formatMoney(totalFunds);
+        if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
 
-    // Call Chart Render
-    renderCharts(data);
-    updateSystemStatus(true);
+        renderCharts(data);
+        updateSystemStatus(true);
+        showSkeletonLoaders(false);
+    } catch (error) {
+        showSkeletonLoaders(false);
+        if (error.name !== 'AbortError') {
+            showToast('Connection error: ' + error.message + '. Retrying...', 'error');
+        } else {
+            showToast('Dashboard request timed out. Retrying...', 'error');
+        }
+        updateSystemStatus(false);
+        setTimeout(() => showDashboard(), 2000);
+    }
+}
+
+
+
+function showSkeletonLoaders(show = true) {
+    const loaders = document.querySelectorAll('.skeleton-loader');
+    loaders.forEach(loader => {
+        loader.style.display = show ? 'block' : 'none';
+    });
 }
 
 function isViewActive(viewId) {
@@ -906,7 +1328,7 @@ function isViewActive(viewId) {
 
 async function updateDashboard() {
     try {
-        const res = await fetch("http://127.0.0.1:8000/report/dashboard");
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/report/dashboard");
         const data = await res.json();
 
         const salesToday = document.getElementById("dashSalesToday");
@@ -915,16 +1337,16 @@ async function updateDashboard() {
         const bank = document.getElementById("dashBank");
         const receivables = document.getElementById("dashReceivables");
 
-        if (salesToday) salesToday.innerText = Number(data.sales_today || 0).toFixed(2);
-        if (salesMonth) salesMonth.innerText = Number(data.sales_month || 0).toFixed(2);
-        if (cash) cash.innerText = Number(data.cash_balance || 0).toFixed(2);
-        if (bank) bank.innerText = Number(data.bank_balance || 0).toFixed(2);
-        if (receivables) receivables.innerText = Number(data.receivables || 0).toFixed(2);
+        if (salesToday) salesToday.innerText = formatMoney(data.sales_today || 0);
+        if (salesMonth) salesMonth.innerText = formatMoney(data.sales_month || 0);
+        if (cash) cash.innerText = formatMoney(data.cash_balance || 0);
+        if (bank) bank.innerText = formatMoney(data.bank_balance || 0);
+        if (receivables) receivables.innerText = formatMoney(data.receivables || 0);
         const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
         const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
         const totalFundsEl = document.getElementById("dashTotalFunds");
         const cashRatioEl = document.getElementById("dashCashRatio");
-        if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
+        if (totalFundsEl) totalFundsEl.innerText = formatMoney(totalFunds);
         if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
 
         const salesCanvas = document.getElementById('salesChart');
@@ -934,7 +1356,6 @@ async function updateDashboard() {
         }
         updateSystemStatus(true);
     } catch (e) {
-        console.error('updateDashboard failed:', e);
         updateSystemStatus(false);
     }
 }
@@ -944,6 +1365,7 @@ function updateSystemStatus(isOnline) {
     const backupEl = document.getElementById('statusBackup');
     const uptimeEl = document.getElementById('statusUptime');
 
+    localStorage.setItem('backendStatus', isOnline ? 'online' : 'offline');
     if (backendEl) {
         backendEl.textContent = isOnline ? 'Online' : 'Offline';
         backendEl.classList.toggle('status-online', isOnline);
@@ -956,11 +1378,15 @@ function updateSystemStatus(isOnline) {
     }
 
     if (uptimeEl) {
-        const seconds = Math.floor((Date.now() - appStartTime) / 1000);
-        const mins = Math.floor(seconds / 60);
-        const hrs = Math.floor(mins / 60);
-        const uptimeText = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m ${seconds % 60}s`;
-        uptimeEl.textContent = uptimeText;
+        if (!isOnline) {
+            uptimeEl.textContent = 'Stopped';
+        } else {
+            const seconds = Math.floor((Date.now() - appStartTime) / 1000);
+            const mins = Math.floor(seconds / 60);
+            const hrs = Math.floor(mins / 60);
+            const uptimeText = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m ${seconds % 60}s`;
+            uptimeEl.textContent = uptimeText;
+        }
     }
 }
 
@@ -1025,6 +1451,128 @@ function formatDateShort(dateStr) {
     return `${dd}-${mm}-${yyyy}`;
 }
 
+function formatDateInput(date) {
+    return date.toISOString().slice(0, 10);
+}
+
+function setReportRange(prefix, days) {
+    const toEl = document.getElementById(`${prefix}To`);
+    const fromEl = document.getElementById(`${prefix}From`);
+    if (!toEl || !fromEl) return;
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - (days - 1));
+    toEl.value = formatDateInput(end);
+    fromEl.value = formatDateInput(start);
+    sessionStorage.setItem(`${prefix}ReportRange`, JSON.stringify({
+        from: fromEl.value,
+        to: toEl.value
+    }));
+}
+
+function getReportRange(prefix) {
+    const toEl = document.getElementById(`${prefix}To`);
+    const fromEl = document.getElementById(`${prefix}From`);
+    if (!toEl || !fromEl) return null;
+
+    if (fromEl.value && toEl.value) {
+        return { from: fromEl.value, to: toEl.value };
+    }
+
+    const stored = sessionStorage.getItem(`${prefix}ReportRange`);
+    if (stored) {
+        try {
+            const parsed = JSON.parse(stored);
+            if (parsed && parsed.from && parsed.to) {
+                fromEl.value = parsed.from;
+                toEl.value = parsed.to;
+                return { from: parsed.from, to: parsed.to };
+            }
+        } catch (e) {
+            // ignore parse errors
+        }
+    }
+
+    setReportRange(prefix, 30);
+    return { from: fromEl.value, to: toEl.value };
+}
+
+function buildReportQuery(prefix) {
+    const range = getReportRange(prefix);
+    if (!range) return "";
+    const params = new URLSearchParams({
+        start: range.from,
+        end: range.to
+    });
+    return `?${params.toString()}`;
+}
+
+async function requestUpdateCheck() {
+    const statusEl = document.getElementById('updateStatus');
+    const lastCheckedEl = document.getElementById('updateLastChecked');
+    const restartBtn = document.getElementById('updateRestartBtn');
+    if (statusEl) statusEl.textContent = 'Checking for updates...';
+    try {
+        const res = await ipcRenderer.invoke('update:check');
+        if (statusEl) {
+            statusEl.textContent = res && res.status ? res.status : 'Update check completed.';
+        }
+        if (restartBtn) restartBtn.style.display = 'none';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Update check failed.';
+    } finally {
+        if (lastCheckedEl) lastCheckedEl.textContent = `Last checked: ${new Date().toLocaleString()}`;
+    }
+}
+
+async function requestUpdateRestart() {
+    const statusEl = document.getElementById('updateStatus');
+    try {
+        const res = await ipcRenderer.invoke('update:restart');
+        if (statusEl) statusEl.textContent = res && res.status ? res.status : 'Restarting...';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Restart failed.';
+    }
+}
+
+async function initUpdateBadge() {
+    const badge = document.getElementById('updateVersionBadge');
+    if (!badge) return;
+    try {
+        const version = await ipcRenderer.invoke('app:getVersion');
+        badge.textContent = `Version: v${version}`;
+    } catch (e) {
+        badge.textContent = 'Version: --';
+    }
+}
+
+ipcRenderer.on('update:status', (_event, payload) => {
+    const statusEl = document.getElementById('updateStatus');
+    const restartBtn = document.getElementById('updateRestartBtn');
+    if (statusEl && payload && payload.message) {
+        statusEl.textContent = payload.message;
+    }
+    if (restartBtn) {
+        restartBtn.style.display = payload && payload.type === 'downloaded' ? 'inline-flex' : 'none';
+    }
+});
+
+async function requestUpdateCheck() {
+    const statusEl = document.getElementById('updateStatus');
+    const lastCheckedEl = document.getElementById('updateLastChecked');
+    if (statusEl) statusEl.textContent = 'Checking for updates...';
+    try {
+        const res = await ipcRenderer.invoke('update:check');
+        if (statusEl) {
+            statusEl.textContent = res && res.status ? res.status : 'Update check completed.';
+        }
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Update check failed.';
+    } finally {
+        if (lastCheckedEl) lastCheckedEl.textContent = `Last checked: ${new Date().toLocaleString()}`;
+    }
+}
+
 // Dark Mode
 function toggleDarkMode() {
     const isDark = document.getElementById("darkModeToggle").checked;
@@ -1047,10 +1595,30 @@ window.onload = function () {
             loadTransactions();
         }
     });
+    const status = localStorage.getItem('backendStatus');
+    if (status === 'offline') {
+        updateSystemStatus(false);
+    }
+    setInterval(checkBackendStatus, 15000);
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark') {
         document.documentElement.setAttribute('data-theme', 'dark');
         document.getElementById("darkModeToggle").checked = true;
+    }
+
+    initUpdateBadge();
+
+    const dailyFrom = document.getElementById('dailyFrom');
+    if (dailyFrom && !dailyFrom.value) {
+        setReportRange('daily', 30);
+    }
+    const shortFrom = document.getElementById('shortFrom');
+    if (shortFrom && !shortFrom.value) {
+        setReportRange('short', 30);
+    }
+    const purchaseFrom = document.getElementById('purchaseFrom');
+    if (purchaseFrom && !purchaseFrom.value) {
+        setReportRange('purchase', 30);
     }
     
     // Failsafe: periodically check if modals are blocking the app
@@ -1087,12 +1655,38 @@ window.onload = function () {
     }, 1000); // Check every second
 }
 
+async function checkBackendStatus() {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch("http://127.0.0.1:8000/report/dashboard", { signal: controller.signal });
+        clearTimeout(timeout);
+        if (res.ok) {
+            updateSystemStatus(true);
+        } else {
+            updateSystemStatus(false);
+        }
+    } catch (e) {
+        updateSystemStatus(false);
+    }
+}
+
 // Other Reports (Keeping existing logic mostly same but adding Error Handling)
 async function showDailySummary() {
     showView('dailySummaryView');
-    const res = await fetch("http://127.0.0.1:8000/report/daily-summary");
-    const data = await res.json();
     const tbody = document.getElementById("dailySummaryBody");
+    tbody.innerHTML = `<tr><td colspan="10" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport(`http://127.0.0.1:8000/report/daily-summary${buildReportQuery('daily')}`);
+        data = await res.json();
+    } catch (e) {
+        showToast("Daily Summary failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="10" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
 
     if (!data || data.length === 0) {
@@ -1134,13 +1728,110 @@ function showDayBook() {
     showView('dayBookView');
 }
 
+let dayBookRows = [];
+const DAYBOOK_ROW_HEIGHT = 36;
+const DAYBOOK_OVERSCAN = 8;
+let dayBookVirtualInitialized = false;
+
+function initDayBookVirtualScroll() {
+    if (dayBookVirtualInitialized) return;
+    const container = document.getElementById('dayBookTableContainer');
+    if (!container) return;
+    dayBookVirtualInitialized = true;
+    let ticking = false;
+    container.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+            renderVirtualizedDayBook();
+            ticking = false;
+        });
+    });
+}
+
+function renderVirtualizedDayBook(resetScroll = false) {
+    const container = document.getElementById('dayBookTableContainer');
+    const tbody = document.getElementById('dayBookBody');
+    if (!container || !tbody) return;
+
+    if (resetScroll) {
+        container.scrollTop = 0;
+    }
+
+    const data = dayBookRows || [];
+    const total = data.length;
+    const containerHeight = container.clientHeight || 520;
+    const scrollTop = container.scrollTop || 0;
+
+    const start = Math.max(0, Math.floor(scrollTop / DAYBOOK_ROW_HEIGHT) - DAYBOOK_OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / DAYBOOK_ROW_HEIGHT) + DAYBOOK_OVERSCAN * 2;
+    const end = Math.min(total, start + visibleCount);
+
+    const topPad = start * DAYBOOK_ROW_HEIGHT;
+    const bottomPad = Math.max(0, (total - end) * DAYBOOK_ROW_HEIGHT);
+    const colspan = currentRole === 'admin' ? 7 : 6;
+
+    const headerRow = document.querySelector('#dayBookTable thead tr');
+    if (headerRow) {
+        const existHeader = headerRow.querySelector('.action-header');
+        if (existHeader) existHeader.remove();
+        if (currentRole === 'admin') {
+            const th = document.createElement('th');
+            th.className = 'action-header';
+            th.innerText = 'Action';
+            headerRow.appendChild(th);
+        }
+    }
+
+    let rowsHTML = '';
+    if (topPad > 0) {
+        rowsHTML += `<tr class="daybook-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    pruneTxnHighlights();
+    for (let i = start; i < end; i += 1) {
+        const row = data[i];
+        const rowClass = getTxnHighlightClass(row.id);
+        let actionCell = "";
+        if (currentRole === 'admin') {
+            actionCell = `<td class="action-cell">
+                <button class="btn-action edit" onclick="openEditModal('${row.id}')" title="Edit">
+                    <ion-icon name="create-outline"></ion-icon>
+                    <span>Edit</span>
+                </button>
+                <button class="btn-action delete" onclick="if(!window.isDeleting) deleteTransaction('${row.id}')" title="Delete">
+                    <ion-icon name="trash-outline"></ion-icon>
+                    <span>Del</span>
+                </button>
+            </td>`;
+        }
+
+        rowsHTML += `
+        <tr${rowClass ? ` class="${rowClass}"` : ''}>
+            <td>${formatDateShort(row.date)}</td>
+            <td>${row.bill_no || ''}</td>
+            <td>${row.party}</td>
+            <td>${row.type}</td>
+            <td>${row.mode}</td>
+            <td class="text-right">${formatMoney(row.amount)}</td>
+            ${actionCell}
+        </tr>`;
+    }
+
+    if (bottomPad > 0) {
+        rowsHTML += `<tr class="daybook-spacer"><td colspan="${colspan}" style="height:${bottomPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    tbody.innerHTML = rowsHTML;
+}
+
 async function loadDayBook() {
     const dateInput = document.getElementById('dayBookDate');
     const date = dateInput ? dateInput.value : '';
     if (!date) return showToast('Select a date', 'error');
 
     try {
-        const res = await fetch(`http://127.0.0.1:8000/transactions/by-date?date=${encodeURIComponent(date)}`);
+        const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions/by-date?date=${encodeURIComponent(date)}`);
         if (res.status === 404) {
             await loadDayBookFallback(date);
             return;
@@ -1163,7 +1854,7 @@ async function loadDayBookFallback(date) {
     const results = [];
 
     while (page <= totalPages) {
-        const res = await fetch(`http://127.0.0.1:8000/transactions?page=${page}&limit=${limit}`);
+        const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions?page=${page}&limit=${limit}`);
         const response = await res.json();
         const rows = response.transactions || [];
         totalPages = response.total_pages || 1;
@@ -1181,20 +1872,24 @@ async function loadDayBookFallback(date) {
 }
 
 function renderDayBookRows(rows) {
-    const tbody = document.getElementById('dayBookBody');
-    tbody.innerHTML = '';
-
-    rows.forEach(row => {
-        tbody.innerHTML += `
-        <tr>
-            <td>${formatDateShort(row.date)}</td>
-            <td>${row.bill_no || ''}</td>
-            <td>${row.party}</td>
-            <td>${row.type}</td>
-            <td>${row.mode}</td>
-            <td class="text-right">${Number(row.amount).toFixed(2)}</td>
-        </tr>`;
+    dayBookRows = (rows || []).slice().sort((a, b) => {
+        const da = new Date(a.date || 0).getTime();
+        const db = new Date(b.date || 0).getTime();
+        if (da !== db) return db - da;
+        const bb = getBillSortValue(a.bill_no);
+        const ba = getBillSortValue(b.bill_no);
+        if (ba !== bb) return ba - bb;
+        return String(a.bill_no || '').localeCompare(String(b.bill_no || ''));
     });
+    initDayBookVirtualScroll();
+    renderVirtualizedDayBook(true);
+}
+
+function refreshDayBookIfNeeded() {
+    const dateInput = document.getElementById('dayBookDate');
+    const date = dateInput ? dateInput.value : '';
+    if (!date) return;
+    loadDayBook();
 }
 
 function exportDayBook() {
@@ -1205,12 +1900,22 @@ function exportDayBook() {
 
 async function showShortReport() {
     showView('shortReportView');
-    const res = await fetch("http://127.0.0.1:8000/report/short-excess");
-    const data = await res.json();
     const tbody = document.getElementById("shortReportBody");
     const summaryDiv = document.getElementById("shortReportSummary");
-    tbody.innerHTML = "";
+    tbody.innerHTML = `<tr><td colspan="7" class="text-right">Loading...</td></tr>`;
     if (summaryDiv) summaryDiv.innerHTML = "";
+
+    let data = [];
+    try {
+        const res = await fetchReport(`http://127.0.0.1:8000/report/short-excess${buildReportQuery('short')}`);
+        data = await res.json();
+    } catch (e) {
+        showToast("Short Report failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="7" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = "";
 
     if (!data || data.length === 0) {
         tbody.innerHTML = `<tr><td colspan="7" class="text-right">No Data</td></tr>`;
@@ -1292,6 +1997,94 @@ async function showShortReport() {
     }
 }
 
+async function showPurchaseReport() {
+    showView('purchaseReportView');
+    const monthlyBody = document.getElementById('purchaseMonthlyBody');
+    const supplierBody = document.getElementById('purchaseSupplierBody');
+    const summaryEl = document.getElementById('purchaseSummary');
+
+    if (monthlyBody) monthlyBody.innerHTML = `<tr><td colspan="2" class="text-right">Loading...</td></tr>`;
+    if (supplierBody) supplierBody.innerHTML = `<tr><td colspan="2" class="text-right">Loading...</td></tr>`;
+    if (summaryEl) summaryEl.innerHTML = '';
+
+    let monthlyData = [];
+    let supplierData = [];
+    try {
+        const partyInput = document.getElementById('purchaseParty');
+        const partyName = partyInput ? partyInput.value.trim() : '';
+        const baseQuery = buildReportQuery('purchase');
+        const params = new URLSearchParams(baseQuery.replace(/^\?/, ''));
+        if (partyName) {
+            params.set('party', partyName);
+        }
+        const query = params.toString() ? `?${params.toString()}` : '';
+        const [monthlyRes, supplierRes] = await Promise.all([
+            fetchReport(`http://127.0.0.1:8000/report/purchase/monthly${query}`),
+            fetchReport(`http://127.0.0.1:8000/report/purchase/supplier${query}`)
+        ]);
+        monthlyData = await monthlyRes.json();
+        supplierData = await supplierRes.json();
+    } catch (e) {
+        showToast('Purchase report failed: ' + e.message, 'error');
+        if (monthlyBody) monthlyBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        if (supplierBody) supplierBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
+    if (monthlyBody) {
+        monthlyBody.innerHTML = '';
+        if (!monthlyData || monthlyData.length === 0) {
+            monthlyBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        } else {
+            let monthlyTotal = 0;
+            monthlyData.forEach(row => {
+                const amt = Number(row.total_amount || 0);
+                monthlyTotal += amt;
+                monthlyBody.innerHTML += `
+                    <tr>
+                        <td>${row.month || ''}</td>
+                        <td class="text-right">${formatMoney(amt)}</td>
+                    </tr>`;
+            });
+            monthlyBody.innerHTML += `
+                <tr style="font-weight:bold;">
+                    <td>Total</td>
+                    <td class="text-right">${formatMoney(monthlyTotal)}</td>
+                </tr>`;
+        }
+    }
+
+    if (supplierBody) {
+        supplierBody.innerHTML = '';
+        if (!supplierData || supplierData.length === 0) {
+            supplierBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        } else {
+            let supplierTotal = 0;
+            supplierData.forEach(row => {
+                const amt = Number(row.total_amount || 0);
+                supplierTotal += amt;
+                supplierBody.innerHTML += `
+                    <tr>
+                        <td>${row.party || ''}</td>
+                        <td class="text-right">${formatMoney(amt)}</td>
+                    </tr>`;
+            });
+            supplierBody.innerHTML += `
+                <tr style="font-weight:bold;">
+                    <td>Total</td>
+                    <td class="text-right">${formatMoney(supplierTotal)}</td>
+                </tr>`;
+
+            if (summaryEl) {
+                summaryEl.innerHTML = `
+                    <div style="padding: 12px 14px; background: var(--card-bg); border-radius: 8px; text-align:center; font-weight: 600;">
+                        Total Purchase: ${formatMoney(supplierTotal)} | Parties: ${supplierData.length}
+                    </div>`;
+            }
+        }
+    }
+}
+
 async function saveCashInHand(dateStr) {
     const input = document.getElementById(`cashInHand-${dateStr}`);
     if (!input) return;
@@ -1326,63 +2119,127 @@ async function saveCashInHand(dateStr) {
 async function showModeReport(mode) {
     showView('modeReportView');
     document.getElementById("modeTitle").innerText = `${mode} Ledger`;
-    const res = await fetch(`http://127.0.0.1:8000/report/mode/${mode}`);
-    const data = await res.json();
     const tbody = document.getElementById("modeReportBody");
+    tbody.innerHTML = `<tr><td colspan="4" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport(`http://127.0.0.1:8000/report/mode/${mode}`);
+        data = await res.json();
+    } catch (e) {
+        showToast("Mode report failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="4" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
     data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.type}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.type}</td><td class="text-right">${formatMoney(row.amount)}</td></tr>`;
     });
 }
 
 async function showExpenseReport() {
     showView('expenseReportView');
-    const res = await fetch("http://127.0.0.1:8000/report/type/Expense");
-    const data = await res.json();
     const tbody = document.getElementById("expenseReportBody");
+    tbody.innerHTML = `<tr><td colspan="4" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/type/Expense");
+        data = await res.json();
+    } catch (e) {
+        showToast("Expense report failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="4" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
     data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.mode}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.mode}</td><td class="text-right">${formatMoney(row.amount)}</td></tr>`;
     });
 }
 
 async function showOutstanding() {
     showView('outstandingView');
-    const res = await fetch("http://127.0.0.1:8000/report/outstanding");
-    const result = await res.json();
-    const tbody = document.getElementById("outstandingBody");
+    let result = { data: [], total: 0 };
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/outstanding");
+        result = await res.json();
+    } catch (e) {
+        showToast("Outstanding report failed: " + e.message, "error");
+        const tbody = document.getElementById("outstandingBody");
+        if (tbody) tbody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        return;
+    }
+    outstandingData = result.data || [];
     const totalSpan = document.getElementById("totalOutstanding");
-    
-    tbody.innerHTML = "";
-    result.data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${row.party}</td><td class="text-right">${row.balance.toFixed(2)}</td></tr>`;
+    if (totalSpan) totalSpan.textContent = `₹${formatMoney(result.total)}`;
+    renderOutstanding();
+}
+
+let outstandingData = [];
+
+function renderOutstanding() {
+    const tbody = document.getElementById("outstandingBody");
+    if (!tbody) return;
+    const sortEl = document.getElementById("outstandingSort");
+    const sortValue = sortEl ? sortEl.value : 'name-asc';
+
+    const sorted = (outstandingData || []).slice().sort((a, b) => {
+        if (sortValue === 'name-desc') {
+            return String(b.party || '').localeCompare(String(a.party || ''), 'en', { sensitivity: 'base' });
+        }
+        if (sortValue === 'amount-desc') {
+            return Number(b.balance || 0) - Number(a.balance || 0);
+        }
+        if (sortValue === 'amount-asc') {
+            return Number(a.balance || 0) - Number(b.balance || 0);
+        }
+        return String(a.party || '').localeCompare(String(b.party || ''), 'en', { sensitivity: 'base' });
     });
-    
-    totalSpan.textContent = `₹${result.total.toFixed(2)}`;
+
+    tbody.innerHTML = '';
+    sorted.forEach(row => {
+        tbody.innerHTML += `<tr><td>${row.party}</td><td class="text-right">${formatMoney(row.balance)}</td></tr>`;
+    });
 }
 
 async function showTrialBalance() {
     showView('trialBalanceView');
-    const res = await fetch("http://127.0.0.1:8000/report/trial-balance");
-    const data = await res.json();
     const tbody = document.getElementById("trialBalanceBody");
+    tbody.innerHTML = `<tr><td colspan="3" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/trial-balance");
+        data = await res.json();
+    } catch (e) {
+        showToast("Trial Balance failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="3" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
     let tD = 0, tC = 0;
     data.forEach(row => {
         tD += row.debit; tC += row.credit;
-        tbody.innerHTML += `<tr><td>${row.account}</td><td>${row.debit.toFixed(2)}</td><td>${row.credit.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${row.account}</td><td>${formatMoney(row.debit)}</td><td>${formatMoney(row.credit)}</td></tr>`;
     });
-    tbody.innerHTML += `<tr style="font-weight:bold"><td>TOTAL</td><td>${tD.toFixed(2)}</td><td>${tC.toFixed(2)}</td></tr>`;
+    tbody.innerHTML += `<tr style="font-weight:bold"><td>TOTAL</td><td>${formatMoney(tD)}</td><td>${formatMoney(tC)}</td></tr>`;
 }
 
 async function showPnL() {
     showView('pnlView');
-    const res = await fetch("http://127.0.0.1:8000/report/pnl");
-    const data = await res.json();
-    document.getElementById("pnlSales").innerText = data.sales.toFixed(2);
-    document.getElementById("pnlExpenses").innerText = data.expenses.toFixed(2);
-    document.getElementById("pnlProfit").innerText = data.net_profit.toFixed(2);
-    document.getElementById("pnlProfit").style.color = data.net_profit >= 0 ? "var(--success)" : "var(--danger)";
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/pnl");
+        const data = await res.json();
+        document.getElementById("pnlSales").innerText = formatMoney(data.sales);
+        document.getElementById("pnlExpenses").innerText = formatMoney(data.expenses);
+        document.getElementById("pnlProfit").innerText = formatMoney(data.net_profit);
+        document.getElementById("pnlProfit").style.color = data.net_profit >= 0 ? "var(--success)" : "var(--danger)";
+    } catch (e) {
+        showToast("P&L failed: " + e.message, "error");
+    }
 }
 
 // Backup & Import
@@ -1405,12 +2262,39 @@ async function backupDB() {
     } catch (e) { showToast("Error: " + e, "error"); }
 }
 
+async function runAutoBackupNow() {
+    try {
+        const res = await fetch(`http://127.0.0.1:8000/backup/auto`, { method: "POST" });
+        const data = await res.json();
+        if (data.status === "Backup Successful") {
+            localStorage.setItem('lastBackupAt', new Date().toISOString());
+            updateSystemStatus(true);
+            showToast("Auto backup created: " + data.path, "success");
+        } else {
+            showToast("Auto backup failed: " + data.detail, "error");
+        }
+    } catch (e) {
+        showToast("Auto backup error: " + e, "error");
+    }
+}
+
+async function openAutoBackupFolder() {
+    try {
+        const res = await ipcRenderer.invoke('folder:openAutoBackup');
+        if (!res.success) {
+            showToast('Open folder failed: ' + res.error, 'error');
+        }
+    } catch (e) {
+        showToast('Open folder failed: ' + e.message, 'error');
+    }
+}
+
 async function restoreDB() {
     const path = await ipcRenderer.invoke('dialog:openBackup');
     if (!path) return;
     if (!confirm("WARNING: This will overwrite the current database. Continue?")) return;
     try {
-        const res = await fetch(`http://127.0.0.1:8000/restore?path=${encodeURIComponent(path)}`, { method: "POST" });
+        const res = await fetchWithTimeout(`http://127.0.0.1:8000/restore?path=${encodeURIComponent(path)}`, { method: "POST" });
         const data = await res.json();
         if (data.status === "Restore Successful") {
             showToast("Restore Successful. Restarting...", "success");
@@ -1464,6 +2348,8 @@ async function stopBackend() {
         const res = await ipcRenderer.invoke('server:stop');
         if (res.success) {
             showToast('Backend stopped.', 'success');
+            updateSystemStatus(false);
+            appStartTime = Date.now();
         } else {
             showToast('Stop failed: ' + res.error, 'error');
         }
@@ -1495,7 +2381,7 @@ async function importData() {
             
             // Reload transactions
             loadTransactions();
-            loadParties();
+            loadParties(true);
         } else {
             showToast("Import Failed: " + data.detail, "error");
         }
@@ -1556,12 +2442,16 @@ async function exportTableToExcel(tableId, filename = '', sheetName = 'Report') 
         const table = document.getElementById(tableId);
         if (!table) return showToast("Table not found to export", "error");
 
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.table_to_sheet(table);
-
         // Sanitize sheet name
         const safeSheetName = (sheetName || "Report").replace(/[\/\\\?\*\[\]]/g, "_").substring(0, 31);
-        XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet(safeSheetName);
+
+        const rows = Array.from(table.querySelectorAll('tr'))
+            .map((row) => Array.from(row.querySelectorAll('th, td'))
+                .map((cell) => cell.innerText.trim()))
+            .filter((row) => row.length > 0);
+        rows.forEach((row) => ws.addRow(row));
 
         const defaultName = filename ? filename + '.xlsx' : 'report.xlsx';
 
@@ -1569,7 +2459,7 @@ async function exportTableToExcel(tableId, filename = '', sheetName = 'Report') 
         const filePath = await ipcRenderer.invoke('dialog:save', defaultName);
         if (!filePath) return; // User canceled
 
-        XLSX.writeFile(wb, filePath);
+        await wb.xlsx.writeFile(filePath);
         showToast("Export Saved!", "success");
     } catch (e) {
         showToast("Export Failed: " + e.message, "error");
@@ -1587,6 +2477,13 @@ function exportLedger() {
 
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
+    // Ctrl+S or Cmd+S: Save transaction edit
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (editingTransactionId) {
+            saveEntry();
+        }
+    }
     // Alt + N: New Entry (Focus Date)
     if (e.altKey && e.key === 'n') {
         e.preventDefault();
@@ -1671,7 +2568,7 @@ async function loadCompanies(retries = 5) {
         select.innerHTML = '<option value="">Loading companies...</option>';
     }
     try {
-        const res = await fetch('http://127.0.0.1:8000/companies');
+        const res = await fetchWithTimeout('http://127.0.0.1:8000/companies');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         select.innerHTML = '';
@@ -1845,7 +2742,7 @@ function updatePermissions() {
 
 async function loadOpeningCashSeed() {
     try {
-        const res = await fetch("http://127.0.0.1:8000/settings/opening-cash");
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/settings/opening-cash");
         const data = await res.json();
         const inp = document.getElementById("openingCashSeed");
         if (inp) inp.value = data.opening_cash ?? 0;
@@ -1903,7 +2800,7 @@ async function renameParty() {
         const data = await res.json();
         if (data.status === "Renamed Successfully") {
             showToast("Party Renamed!", "success");
-            loadParties(); // Refresh lists
+            loadParties(true); // Refresh lists
             document.getElementById('renameOldName').value = '';
             document.getElementById('renameNewName').value = '';
         } else {
@@ -1941,7 +2838,7 @@ async function loadUsers() {
     const tbody = document.getElementById('usersTableBody');
     tbody.innerHTML = 'Loading...';
     try {
-        const res = await fetch('http://127.0.0.1:8000/users');
+        const res = await fetchWithTimeout('http://127.0.0.1:8000/users');
         const users = await res.json();
         tbody.innerHTML = '';
         users.forEach(u => {
@@ -1995,22 +2892,83 @@ function showAuditLogs() {
     showView('auditView');
 }
 
-async function loadAuditLog(targetBodyId = 'auditTableBody') {
-    const tbody = document.getElementById(targetBodyId);
-    try {
-        const res = await fetch('http://127.0.0.1:8000/audit');
-        const logs = await res.json();
-        tbody.innerHTML = '';
-        logs.forEach(l => {
-            tbody.innerHTML += `
-            <tr>
-                <td>${new Date(l.timestamp).toLocaleString()}</td>
-                <td>${l.username}</td>
-                <td>${l.action}</td>
-                <td>${l.details}</td>
-            </tr>`;
+let auditLogsData = [];
+const AUDIT_ROW_HEIGHT = 32;
+const AUDIT_OVERSCAN = 8;
+let auditVirtualInitialized = false;
+
+function initAuditVirtualScroll(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (!auditVirtualInitialized) {
+        auditVirtualInitialized = true;
+    }
+    let ticking = false;
+    container.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+            renderAuditVirtual(containerId);
+            ticking = false;
         });
-    } catch (e) { console.error(e); }
+    }, { passive: true });
+}
+
+function renderAuditVirtual(containerId, resetScroll = false) {
+    const container = document.getElementById(containerId);
+    const tbodyId = containerId === 'auditTableContainerView' ? 'auditTableBodyView' : 'auditTableBody';
+    const tbody = document.getElementById(tbodyId);
+    if (!container || !tbody) return;
+
+    if (resetScroll) {
+        container.scrollTop = 0;
+    }
+
+    const data = auditLogsData || [];
+    const total = data.length;
+    const containerHeight = container.clientHeight || 420;
+    const scrollTop = container.scrollTop || 0;
+
+    const start = Math.max(0, Math.floor(scrollTop / AUDIT_ROW_HEIGHT) - AUDIT_OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / AUDIT_ROW_HEIGHT) + AUDIT_OVERSCAN * 2;
+    const end = Math.min(total, start + visibleCount);
+
+    const topPad = start * AUDIT_ROW_HEIGHT;
+    const bottomPad = Math.max(0, (total - end) * AUDIT_ROW_HEIGHT);
+    const colspan = 4;
+
+    let rowsHTML = '';
+    if (topPad > 0) {
+        rowsHTML += `<tr class="audit-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    for (let i = start; i < end; i += 1) {
+        const l = data[i];
+        rowsHTML += `
+        <tr>
+            <td>${new Date(l.timestamp).toLocaleString()}</td>
+            <td>${l.username}</td>
+            <td>${l.action}</td>
+            <td>${l.details}</td>
+        </tr>`;
+    }
+
+    if (bottomPad > 0) {
+        rowsHTML += `<tr class="audit-spacer"><td colspan="${colspan}" style="height:${bottomPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    tbody.innerHTML = rowsHTML;
+}
+
+async function loadAuditLog(targetBodyId = 'auditTableBody') {
+    try {
+        const res = await fetchWithTimeout('http://127.0.0.1:8000/audit');
+        const logs = await res.json();
+        auditLogsData = logs || [];
+        const containerId = targetBodyId === 'auditTableBodyView' ? 'auditTableContainerView' : 'auditTableContainer';
+        initAuditVirtualScroll(containerId);
+        renderAuditVirtual(containerId, true);
+    } catch (e) { showToast("Error: " + e.message, "error"); }
 }
 
 // Database Configuration Functions (continued)
@@ -2028,11 +2986,11 @@ async function loadDbConfig() {
         document.getElementById('cfgBackupDir').value = config.backup_dir || '';
         toggleSqlAuth();
     } catch (e) {
-        console.error('Backend not available, using defaults:', e);
+        showToast("Backend not available, using defaults", "warning");
         // Load defaults when backend is not running
         const localCfg = await loadClientConfig();
         document.getElementById('cfgServer').value = 'localhost';
-        document.getElementById('cfgDatabase').value = 'M_Finlogs_Accounts';
+        document.getElementById('cfgDatabase').value = 'Finlogs';
         document.getElementById('cfgAuthType').value = 'windows';
         document.getElementById('cfgBackupDir').value = '';
         document.getElementById('cfgApiBase').value = localCfg.api_base || apiBase;
@@ -2127,7 +3085,7 @@ async function saveDbConfig() {
             apiBase = normalizeApiBase(config.api_base);
         }
     } catch (e) {
-        console.error('Failed to save client config:', e);
+        showToast("Failed to save configuration: " + e.message, "error");
     }
     
     try {

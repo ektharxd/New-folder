@@ -1,0 +1,35 @@
+/* Skeleton Loaders */
+.skeleton-loader {
+    display: none;
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+    border-radius: 8px;
+    margin: 8px 0;
+}
+
+@keyframes skeleton-loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.skeleton-card {
+    height: 80px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.skeleton-line {
+    height: 12px;
+    margin: 4px 0;
+    border-radius: 4px;
+}
+
+.skeleton-header {
+    height: 24px;
+    margin-bottom: 12px;
+}
+
+[data-theme="dark"] .skeleton-loader {
+    background: linear-gradient(90deg, #333 25%, #444 50%, #333 75%);
+}

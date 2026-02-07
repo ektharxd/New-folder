@@ -9,9 +9,11 @@
     <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/svg+xml" href="assets/finlogs.svg">
     <link rel="icon" type="image/x-icon" href="assets/finlogs.ico">
     <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="skeleton-loaders.css">
     <!-- Ionicons for Icons -->
     <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
     <script nomodule src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.js"></script>
@@ -27,31 +29,47 @@
     <!-- Simple Login Screen -->
     <div id="loginModal" class="login-background" style="display: flex;">
         <div class="login-glass-card">
-            <h2 class="login-title">M-Finlogs</h2>
-            <p class="login-subtitle">Sign in to your account</p>
+            <div class="login-hero">
+                <img src="assets/finlogs.svg" alt="Finlogs">
+            </div>
+            <div class="login-brand">M-Finlogs</div>
+            <h2 class="login-title">Sign in to continue</h2>
+            <p class="login-subtitle">Manage your entries, reports, and backups in one place.</p>
 
             <div class="input-group">
                 <label>Company</label>
-                <select id="loginCompany" class="login-input"></select>
+                <div class="login-field">
+                    <ion-icon name="business-outline"></ion-icon>
+                    <select id="loginCompany" class="login-input"></select>
+                </div>
             </div>
 
             <div class="input-group">
                 <label>Create Company</label>
-                <div style="display:flex; gap:8px;">
-                    <input type="text" id="newCompanyName" class="login-input" placeholder="New company name">
-                    <button onclick="createCompany()" class="login-btn" style="width:auto; padding: 10px 14px;">Add</button>
+                <div class="login-inline">
+                    <div class="login-field">
+                        <ion-icon name="add-circle-outline"></ion-icon>
+                        <input type="text" id="newCompanyName" class="login-input" placeholder="New company name">
+                    </div>
+                    <button onclick="createCompany()" class="login-btn login-btn--ghost" type="button">Add</button>
                 </div>
             </div>
 
             <div class="input-group">
                 <label>Username</label>
-                <input type="text" id="loginUser" class="login-input" placeholder="Enter username" autocomplete="off">
+                <div class="login-field">
+                    <ion-icon name="person-outline"></ion-icon>
+                    <input type="text" id="loginUser" class="login-input" placeholder="Enter username" autocomplete="off">
+                </div>
             </div>
 
             <div class="input-group">
                 <label>Password</label>
-                <input type="password" id="loginPass" class="login-input" placeholder="Enter password"
-                    onkeydown="if(event.key==='Enter') handleLogin()">
+                <div class="login-field">
+                    <ion-icon name="lock-closed-outline"></ion-icon>
+                    <input type="password" id="loginPass" class="login-input" placeholder="Enter password"
+                        onkeydown="if(event.key==='Enter') handleLogin()">
+                </div>
             </div>
 
             <button onclick="handleLogin()" class="login-btn">Sign In</button>
@@ -121,7 +139,7 @@
         <!-- Sidebar -->
         <div class="sidebar">
             <div class="brand">
-                <ion-icon name="stats-chart" style="color: var(--accent);"></ion-icon>
+                <img src="assets/finlogs.svg" alt="M-Finlogs" style="width: 28px; height: 28px; margin-right: 2px;">
                 M-Finlogs
             </div>
 
@@ -145,6 +163,9 @@
             <a class="nav-item" onclick="showShortReport(); activateNav(this)">
                 <ion-icon name="alert-outline"></ion-icon> Short Report
             </a>
+               <a class="nav-item" onclick="showPurchaseReport(); activateNav(this)">
+                   <ion-icon name="cart-outline"></ion-icon> Purchase Report
+               </a>
             <a class="nav-item" onclick="showExpenseReport(); activateNav(this)">
                 <ion-icon name="wallet-outline"></ion-icon> Expenses
             </a>
@@ -189,6 +210,9 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h2>Daily Transactions <span id="txnPageInfo" style="font-size: 14px; font-weight: normal; color: var(--text-secondary);"></span></h2>
                     <div style="display: flex; gap: 8px; align-items: center;">
+                        <button id="txnRangeToggleBtn" class="secondary" onclick="toggleTxnRange()" title="Toggle date range" style="padding: 6px 10px;">
+                            Last 30 Days
+                        </button>
                         <button onclick="loadTransactions(currentTxnPage - 1)" id="prevPageBtn" class="icon-btn" title="Previous Page" style="padding: 6px 10px;">
                             <ion-icon name="chevron-back-outline"></ion-icon>
                         </button>
@@ -201,10 +225,11 @@
                     </div>
                 </div>
                 <div class="card" style="margin: 12px 0; padding: 12px;">
-                    <div style="display:grid; grid-template-columns: 140px 160px 1fr 140px 140px 160px; gap: 10px; align-items:center;">
+                    <div style="display:grid; grid-template-columns: 140px 140px 2.5fr 140px 120px 140px; gap: 10px; align-items:center;">
                         <input type="date" id="newDate" onkeydown="handleEntryNavigation(event, 'newBill')">
                         <input type="text" id="newBill" placeholder="Ref/Bill" onkeydown="handleEntryNavigation(event, 'newParty')">
-                        <input type="text" id="newParty" list="partyList" placeholder="Select Party" onkeydown="handleEntryNavigation(event, 'newType')">
+                        <input type="text" id="newParty" list="partyList" placeholder="Select Party" value="Customer" onkeydown="handleEntryNavigation(event, 'newType')" onfocus="if(this.value==='Customer') this.value=''; this.select();" onblur="if(this.value==='') this.value='Customer';">
+
                         <select id="newType" onkeydown="handleEntryNavigation(event, 'newMode')">
                             <option>Sale</option>
                             <option>Sale Return</option>
@@ -217,26 +242,28 @@
                             <option>UPI</option>
                             <option>Bank</option>
                         </select>
-                        <input type="number" id="newAmount" placeholder="0.00" onkeydown="handleEntryNavigation(event, 'save')">
+                        <input type="number" id="newAmount" placeholder="0.00" min="0" step="1" onkeydown="handleEntryNavigation(event, 'save')" oninput="if(this.value < 0) this.value = ''; if(this.value && !this.value.match(/^\d+(\.\d{1,2})?$/)) this.value = Math.floor(this.value * 100) / 100;">
                     </div>
                     <datalist id="partyList"></datalist>
                     <div style="margin-top: 8px; text-align: right; color: var(--text-secondary); font-size: 13px;">
                         Press <b>Enter</b> to navigate fields. Press <b>Enter</b> in Amount to Save.
                     </div>
                 </div>
-                <table id="entryTable">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Bill No</th>
-                            <th>Party</th>
-                            <th>Type</th>
-                            <th>Mode</th>
-                            <th>Amount</th>
-                        </tr>
-                    </thead>
-                    <tbody id="transactionList"></tbody>
-                </table>
+                <div id="txnTableContainer" class="txn-table-container">
+                    <table id="entryTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Bill No</th>
+                                <th>Party</th>
+                                <th>Type</th>
+                                <th>Mode</th>
+                                <th>Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactionList"></tbody>
+                    </table>
+                </div>
             </div>
 
             <!-- Dashboard View -->
@@ -413,19 +440,21 @@
                         onkeyup="filterTable('dayBookTable', this.value)" style="width: 200px;">
                 </div>
 
-                <table id="dayBookTable">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Bill</th>
-                            <th>Party</th>
-                            <th>Type</th>
-                            <th>Mode</th>
-                            <th class="text-right">Amount</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dayBookBody"></tbody>
-                </table>
+                <div id="dayBookTableContainer" class="daybook-table-container">
+                    <table id="dayBookTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Bill</th>
+                                <th>Party</th>
+                                <th>Type</th>
+                                <th>Mode</th>
+                                <th class="text-right">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dayBookBody"></tbody>
+                    </table>
+                </div>
             </div>
 
             <!-- Daily Summary View -->
@@ -433,14 +462,22 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h2>Daily Summary</h2>
                     <div>
-                        <!-- Note: Daily Summary is div-based, not table. Creating a hidden table for export might be needed or just printing? 
-                             Actually user wants Export to Excel. SheetJS can export JSON data too. 
-                             For now let's add Print. Exporting this specific card layout is tricky without a table. 
-                             I'll skip Excel for Summary View for now or add it later if critical. 
-                             User asked for "print preview and print to excel option too" generally. 
-                             Let's prioritize Table views first. -->
-                        <button class="secondary" onclick="window.print()">Print</button>
+                            <button class="secondary" onclick="exportTableToExcel('dailySummaryTable', 'Daily_Summary')">Export Excel</button>
+                            <button class="secondary" onclick="window.print()">Print</button>
                     </div>
+                </div>
+                <div class="card" style="margin-bottom: 16px; padding: 12px; display:flex; flex-wrap: wrap; gap: 12px; align-items:center;">
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        From:
+                        <input type="date" id="dailyFrom" style="width: 150px;">
+                    </label>
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        To:
+                        <input type="date" id="dailyTo" style="width: 150px;">
+                    </label>
+                    <button class="secondary" onclick="setReportRange('daily', 30)">Last 30 Days</button>
+                    <button class="secondary" onclick="setReportRange('daily', 90)">Last 90 Days</button>
+                    <button onclick="showDailySummary()">Apply</button>
                 </div>
                 <table id="dailySummaryTable">
                     <thead>
@@ -466,8 +503,22 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h2>Short / Excess Report</h2>
                     <div>
+                        <button class="secondary" onclick="exportTableToExcel('shortReportTable', 'Short_Excess_Report')">Export Excel</button>
                         <button class="secondary" onclick="window.print()">Print</button>
                     </div>
+                </div>
+                <div class="card" style="margin-bottom: 16px; padding: 12px; display:flex; flex-wrap: wrap; gap: 12px; align-items:center;">
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        From:
+                        <input type="date" id="shortFrom" style="width: 150px;">
+                    </label>
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        To:
+                        <input type="date" id="shortTo" style="width: 150px;">
+                    </label>
+                    <button class="secondary" onclick="setReportRange('short', 30)">Last 30 Days</button>
+                    <button class="secondary" onclick="setReportRange('short', 90)">Last 90 Days</button>
+                    <button onclick="showShortReport()">Apply</button>
                 </div>
                 <table id="shortReportTable">
                     <thead>
@@ -484,7 +535,59 @@
                     <tbody id="shortReportBody"></tbody>
                 </table>
                 <div id="shortReportSummary" style="margin-top: 16px;"></div>
-            </div>
+                </div>
+
+                <!-- Purchase Report View -->
+                <div id="purchaseReportView" class="view-section">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2>Purchase Report</h2>
+                        <div>
+                            <button class="secondary" onclick="exportTableToExcel('purchaseMonthlyTable', 'Monthly_Purchase_Report')">Export Monthly</button>
+                            <button class="secondary" onclick="exportTableToExcel('purchaseSupplierTable', 'Party_Purchase_Report')">Export Party</button>
+                            <button class="secondary" onclick="window.print()">Print</button>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-bottom: 16px; padding: 12px; display:flex; flex-wrap: wrap; gap: 12px; align-items:center;">
+                        <label style="display:flex; align-items:center; gap: 8px;">
+                            From:
+                            <input type="date" id="purchaseFrom" style="width: 150px;">
+                        </label>
+                        <label style="display:flex; align-items:center; gap: 8px;">
+                            To:
+                            <input type="date" id="purchaseTo" style="width: 150px;">
+                        </label>
+                        <label style="display:flex; align-items:center; gap: 8px;">
+                            Party:
+                            <input type="text" id="purchaseParty" list="partyList" placeholder="Search party..." style="width: 200px;">
+                        </label>
+                        <button class="secondary" onclick="setReportRange('purchase', 30)">Last 30 Days</button>
+                        <button class="secondary" onclick="setReportRange('purchase', 90)">Last 90 Days</button>
+                        <button onclick="showPurchaseReport()">Apply</button>
+                    </div>
+
+                    <h3 style="margin: 10px 0 8px;">Monthly Purchase</h3>
+                    <table id="purchaseMonthlyTable">
+                        <thead>
+                            <tr>
+                                <th>Month</th>
+                                <th class="text-right">Total Purchase</th>
+                            </tr>
+                        </thead>
+                        <tbody id="purchaseMonthlyBody"></tbody>
+                    </table>
+
+                    <h3 style="margin: 18px 0 8px;">Party-wise Purchase</h3>
+                    <table id="purchaseSupplierTable">
+                        <thead>
+                            <tr>
+                                <th>Party</th>
+                                <th class="text-right">Total Purchase</th>
+                            </tr>
+                        </thead>
+                        <tbody id="purchaseSupplierBody"></tbody>
+                    </table>
+                    <div id="purchaseSummary" style="margin-top: 16px;"></div>
+                </div>
 
             <!-- Mode Report View -->
             <div id="modeReportView" class="view-section">
@@ -504,8 +607,14 @@
 
             <!-- Expense Report View -->
             <div id="expenseReportView" class="view-section">
-                <h2>Expense Report</h2>
-                <table>
+                <div class="report-header">
+                    <h2>Expense Report</h2>
+                    <div>
+                        <button class="secondary" onclick="exportTableToExcel('expenseReportTable', 'Expense_Report')">Export Excel</button>
+                        <button class="secondary" onclick="window.print()">Print</button>
+                    </div>
+                </div>
+                <table id="expenseReportTable" class="report-table">
                     <thead>
                         <tr>
                             <th>Date</th>
@@ -520,15 +629,24 @@
 
             <!-- Outstanding View -->
             <div id="outstandingView" class="view-section">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="report-header">
                     <h2>Credit Outstanding</h2>
-                    <input type="text" placeholder="Search..."
-                        onkeyup="filterTable('outstandingBody', this.value, true)" style="width: 200px;">
+                    <div style="display:flex; gap: 10px; align-items:center;">
+                        <button class="secondary" onclick="exportTableToExcel('outstandingTable', 'Credit_Outstanding')">Export Excel</button>
+                        <select id="outstandingSort" onchange="renderOutstanding()" style="padding: 6px 10px;">
+                            <option value="name-asc">A → Z</option>
+                            <option value="name-desc">Z → A</option>
+                            <option value="amount-desc">Amount ↓</option>
+                            <option value="amount-asc">Amount ↑</option>
+                        </select>
+                        <input type="text" placeholder="Search..."
+                            onkeyup="filterTable('outstandingBody', this.value, true)" style="width: 200px;">
+                    </div>
                 </div>
-                <div style="margin: 12px 0; padding: 16px; background: var(--card-bg); border-radius: 8px; font-size: 18px; font-weight: bold; text-align: center;">
+                <div class="report-summary-card">
                     Total Outstanding: <span id="totalOutstanding" style="color: #FF6B6B;">₹0.00</span>
                 </div>
-                <table>
+                <table id="outstandingTable" class="report-table">
                     <thead>
                         <tr>
                             <th>Party</th>
@@ -541,7 +659,7 @@
 
             <!-- Trial Balance View -->
             <div id="trialBalanceView" class="view-section">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="report-header">
                     <h2>Trial Balance</h2>
                     <div>
                         <button class="secondary"
@@ -549,7 +667,7 @@
                         <button class="secondary" onclick="window.print()">Print</button>
                     </div>
                 </div>
-                <table>
+                <table class="report-table">
                     <thead>
                         <tr>
                             <th>Account / Party</th>
@@ -563,9 +681,11 @@
 
             <!-- PnL View -->
             <div id="pnlView" class="view-section">
-                <h2>Profit & Loss</h2>
+                <div class="report-header">
+                    <h2>Profit & Loss</h2>
+                </div>
                 <div class="card">
-                    <table style="box-shadow: none;">
+                    <table class="report-table" style="box-shadow: none;">
                         <tr>
                             <td>Total Sales</td>
                             <td class="text-right" id="pnlSales">0</td>
@@ -592,7 +712,7 @@
                 </div>
 
                 <div class="card" style="padding: 0;">
-                    <div style="max-height: 70vh; overflow-y: auto;">
+                    <div id="auditTableContainerView" class="audit-table-container">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -638,9 +758,32 @@
                 </div>
                 <br>
 
+                <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap: 16px;">
+                    <div>
+                        <h3 style="margin-bottom: 6px;">Software Update</h3>
+                        <div style="color: var(--text-secondary); font-size: 13px;">
+                            Keep M-Finlogs up to date with the latest improvements.
+                        </div>
+                        <div id="updateStatus" style="margin-top: 6px; font-size: 12px; color: var(--text-secondary);">Ready to check for updates.</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+                        <div id="updateVersionBadge" style="font-size: 12px; padding: 4px 8px; border-radius: 999px; background: #EEF2FF; color: #3730A3; border: 1px solid #C7D2FE;">
+                            Version: --
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button onclick="requestUpdateCheck()">Check for Updates</button>
+                            <button id="updateRestartBtn" class="secondary" onclick="requestUpdateRestart()" style="display:none;">Restart & Install</button>
+                        </div>
+                        <div id="updateLastChecked" style="font-size: 11px; color: var(--text-secondary);"></div>
+                    </div>
+                </div>
+                <br>
+
                 <div class="card">
                     <h3>Backup & Restore</h3>
                     <button onclick="backupDB()">Backup Database</button>
+                    <button class="secondary" onclick="runAutoBackupNow()" style="margin-left: 8px;">Run Auto Backup Now</button>
+                    <button class="secondary" onclick="openAutoBackupFolder()" style="margin-left: 8px;">Open Auto Backup Folder</button>
                     <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
                         <label style="display:block; margin-bottom: 8px;">Restore from File:</label>
                         <button class="secondary" onclick="restoreDB()">Choose Backup & Restore</button>
@@ -724,7 +867,7 @@
                     <!-- Audit Log -->
                     <div class="card">
                         <h3>Audit Log</h3>
-                        <div style="max-height: 300px; overflow-y: auto;">
+                        <div id="auditTableContainer" class="audit-table-container" style="max-height: 300px;">
                             <table class="data-table">
                                 <thead>
                                     <tr>

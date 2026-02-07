@@ -1,6 +1,6 @@
 {
   "server": "localhost",
-  "database": "M_Finlogs_Accounts",
+  "database": "Munna_Accounts",
   "auth_type": "windows",
   "username": ""
 }
