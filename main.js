@@ -7,11 +7,28 @@ const fs = require('fs');
 const http = require('http');
 
 let autoUpdaterRef = null;
+let autoUpdaterReady = false;
 
 function sendUpdateStatus(payload) {
     if (mainWindow && mainWindow.webContents) {
         mainWindow.webContents.send('update:status', payload);
     }
+}
+
+function wireAutoUpdaterEvents() {
+    if (!autoUpdaterRef || autoUpdaterReady || !mainWindow) return;
+    autoUpdaterReady = true;
+    autoUpdaterRef.on('checking-for-update', () => sendUpdateStatus({ type: 'checking', message: 'Checking for updates...' }));
+    autoUpdaterRef.on('update-available', (info) => sendUpdateStatus({ type: 'available', message: `Update available: v${info.version}` }));
+    autoUpdaterRef.on('update-not-available', () => sendUpdateStatus({ type: 'none', message: 'You are up to date.' }));
+    autoUpdaterRef.on('error', (err) => sendUpdateStatus({ type: 'error', message: `Update error: ${err.message}` }));
+    autoUpdaterRef.on('download-progress', (p) => {
+        const percent = Math.round(p.percent || 0);
+        sendUpdateStatus({ type: 'progress', message: `Downloading update... ${percent}%`, percent });
+    });
+    autoUpdaterRef.on('update-downloaded', () => {
+        sendUpdateStatus({ type: 'downloaded', message: 'Update downloaded. Restart to install.' });
+    });
 }
 
 let mainWindow;
@@ -51,19 +68,7 @@ function createMainWindow() {
     });
     mainWindow.loadFile('index.html');
 
-    if (autoUpdaterRef) {
-        autoUpdaterRef.on('checking-for-update', () => sendUpdateStatus({ type: 'checking', message: 'Checking for updates...' }));
-        autoUpdaterRef.on('update-available', (info) => sendUpdateStatus({ type: 'available', message: `Update available: v${info.version}` }));
-        autoUpdaterRef.on('update-not-available', () => sendUpdateStatus({ type: 'none', message: 'You are up to date.' }));
-        autoUpdaterRef.on('error', (err) => sendUpdateStatus({ type: 'error', message: `Update error: ${err.message}` }));
-        autoUpdaterRef.on('download-progress', (p) => {
-            const percent = Math.round(p.percent || 0);
-            sendUpdateStatus({ type: 'progress', message: `Downloading update... ${percent}%`, percent });
-        });
-        autoUpdaterRef.on('update-downloaded', () => {
-            sendUpdateStatus({ type: 'downloaded', message: 'Update downloaded. Restart to install.' });
-        });
-    }
+    wireAutoUpdaterEvents();
 
     mainWindow.once('ready-to-show', () => {
         setTimeout(() => {
@@ -272,10 +277,16 @@ ipcMain.handle('update:check', async () => {
                 ({ autoUpdater: autoUpdaterRef } = require('electron-updater'));
                 autoUpdaterRef.autoDownload = true;
                 autoUpdaterRef.autoInstallOnAppQuit = true;
+                autoUpdaterRef.allowPrerelease = true;
+                if (!app.isPackaged) {
+                    autoUpdaterRef.forceDevUpdateConfig = true;
+                }
             } catch (e) {
                 return { status: 'Auto-updater not available', error: e.message };
             }
         }
+
+        wireAutoUpdaterEvents();
 
         await autoUpdaterRef.checkForUpdates();
         return { status: 'Checking for updates...' };
