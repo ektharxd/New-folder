@@ -156,12 +156,118 @@ let currentTxnPage = 1;
 let totalTxnPages = 1;
 let appStartTime = Date.now();
 let currentTransactionsCache = [];
+let txnRangeDays = 30; // default to last 30 days for faster initial load
+const TXN_CACHE_TTL_MS = 60 * 1000;
+let txnPageCache = { key: null, ts: 0, data: null };
+let allTransactions = [];
+const TXN_ROW_HEIGHT = 36;
+const TXN_OVERSCAN = 8;
+let txnVirtualInitialized = false;
 // Guard flag to prevent concurrent loadTransactions calls
 // Multiple rapid calls cause DOM thrashing -> input fields freeze
 // Fixed: Only one loadTransactions can run at a time
 let isLoadingTransactions = false;
 
-async function loadTransactions(page = 1) {
+function initTxnVirtualScroll() {
+    if (txnVirtualInitialized) return;
+    const container = document.getElementById('txnTableContainer');
+    if (!container) return;
+    txnVirtualInitialized = true;
+    let ticking = false;
+    container.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+            renderVirtualizedTransactions();
+            ticking = false;
+        });
+    });
+}
+
+function renderVirtualizedTransactions(resetScroll = false) {
+    const container = document.getElementById('txnTableContainer');
+    const tbody = document.getElementById('transactionList');
+    if (!container || !tbody) return;
+
+    if (resetScroll) {
+        container.scrollTop = 0;
+    }
+
+    const data = allTransactions || [];
+    const total = data.length;
+    const containerHeight = container.clientHeight || 520;
+    const scrollTop = container.scrollTop || 0;
+
+    const start = Math.max(0, Math.floor(scrollTop / TXN_ROW_HEIGHT) - TXN_OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / TXN_ROW_HEIGHT) + TXN_OVERSCAN * 2;
+    const end = Math.min(total, start + visibleCount);
+
+    const topPad = start * TXN_ROW_HEIGHT;
+    const bottomPad = Math.max(0, (total - end) * TXN_ROW_HEIGHT);
+    const colspan = currentRole === 'admin' ? 7 : 6;
+
+    let rowsHTML = '';
+    if (topPad > 0) {
+        rowsHTML += `<tr class="txn-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    for (let i = start; i < end; i += 1) {
+        const txn = data[i];
+        let actionCell = "";
+        if (currentRole === 'admin') {
+            actionCell = `<td class="action-cell">
+                <button class="btn-action edit" onclick="openEditModal('${txn.id}')" title="Edit">
+                    <ion-icon name="create-outline"></ion-icon>
+                    <span>Edit</span>
+                </button>
+                <button class="btn-action delete" onclick="if(!window.isDeleting) deleteTransaction('${txn.id}')" title="Delete">
+                    <ion-icon name="trash-outline"></ion-icon>
+                    <span>Del</span>
+                </button>
+            </td>`;
+        }
+
+        rowsHTML += `
+        <tr>
+            <td>${formatDateShort(txn.date)}</td>
+            <td>${txn.bill_no || ''}</td>
+            <td>${txn.party}</td>
+            <td>${txn.type}</td>
+            <td>${txn.mode}</td>
+            <td>${formatMoney(txn.amount)}</td>
+            ${actionCell}
+        </tr>`;
+    }
+
+    if (bottomPad > 0) {
+        rowsHTML += `<tr class="txn-spacer"><td colspan="${colspan}" style="height:${bottomPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    tbody.innerHTML = rowsHTML;
+}
+
+function invalidateTxnCache() {
+    txnPageCache = { key: null, ts: 0, data: null };
+}
+
+function updateTxnRangeUI() {
+    const btn = document.getElementById('txnRangeToggleBtn');
+    if (!btn) return;
+    if (txnRangeDays && txnRangeDays > 0) {
+        btn.textContent = 'Last 30 Days';
+    } else {
+        btn.textContent = 'All Transactions';
+    }
+}
+
+function toggleTxnRange() {
+    txnRangeDays = (txnRangeDays && txnRangeDays > 0) ? 0 : 30;
+    txnPageCache = { key: null, ts: 0, data: null };
+    updateTxnRangeUI();
+    loadTransactions(1);
+}
+
+async function loadTransactions(page = 1, force = false) {
     if (isLoadingTransactions) {
         return;
     }
@@ -174,8 +280,19 @@ async function loadTransactions(page = 1) {
             return;
         }
         
-        const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions?page=${page}&limit=50`);
-        const response = await res.json();
+        const rangeParam = (txnRangeDays && txnRangeDays > 0) ? `&days=${txnRangeDays}` : '';
+        const cacheKey = `page=${page}&limit=50${rangeParam}`;
+        let response = null;
+
+        if (!force && page === 1 && txnPageCache.key === cacheKey && (Date.now() - txnPageCache.ts) < TXN_CACHE_TTL_MS) {
+            response = txnPageCache.data;
+        } else {
+            const res = await fetchWithTimeout(`http://127.0.0.1:8000/transactions?${cacheKey}`);
+            response = await res.json();
+            if (page === 1) {
+                txnPageCache = { key: cacheKey, ts: Date.now(), data: response };
+            }
+        }
         
         // Validate response format
         if (!response || !response.transactions) {
@@ -199,8 +316,6 @@ async function loadTransactions(page = 1) {
             return String(b.bill_no || '').localeCompare(String(a.bill_no || ''));
         });
 
-        const tbody = document.getElementById("transactionList");
-        
         // Admin Edit Column Header (Recent Transactions Table)
         const headerRow = document.querySelector('#recentTxnTable thead tr');
         if (headerRow) {
@@ -215,37 +330,9 @@ async function loadTransactions(page = 1) {
             }
         }
 
-        // Build HTML string first, then set once - MUCH faster
-        let rowsHTML = "";
-        sortedData.forEach(txn => {
-            let actionCell = "";
-            if (currentRole === 'admin') {
-                actionCell = `<td class="action-cell">
-                    <button class="btn-action edit" onclick="openEditModal('${txn.id}')" title="Edit">
-                        <ion-icon name="create-outline"></ion-icon>
-                        <span>Edit</span>
-                    </button>
-                    <button class="btn-action delete" onclick="if(!window.isDeleting) deleteTransaction('${txn.id}')" title="Delete">
-                        <ion-icon name="trash-outline"></ion-icon>
-                        <span>Del</span>
-                    </button>
-                </td>`;
-            }
-
-            rowsHTML += `
-            <tr>
-                <td>${formatDateShort(txn.date)}</td>
-                <td>${txn.bill_no || ''}</td>
-                <td>${txn.party}</td>
-                <td>${txn.type}</td>
-                <td>${txn.mode}</td>
-                <td>${txn.amount.toFixed(2)}</td>
-                ${actionCell}
-            </tr>`;
-        });
-        
-        // Set innerHTML once instead of 500 times
-        tbody.innerHTML = rowsHTML;
+        allTransactions = sortedData;
+        initTxnVirtualScroll();
+        renderVirtualizedTransactions(true);
 
         // Set default date if not set
         const dateInput = document.getElementById("newDate");
@@ -258,8 +345,13 @@ async function loadTransactions(page = 1) {
         const currentPageDisplay = document.getElementById('currentPageDisplay');
         const prevBtn = document.getElementById('prevPageBtn');
         const nextBtn = document.getElementById('nextPageBtn');
+
+        updateTxnRangeUI();
         
-        if (pageInfo) pageInfo.textContent = `(${response.total} entries)`;
+        if (pageInfo) {
+            const rangeLabel = (txnRangeDays && txnRangeDays > 0) ? `Last ${txnRangeDays} days` : 'All time';
+            pageInfo.textContent = `(${response.total} entries • ${rangeLabel})`;
+        }
         if (currentPageDisplay) currentPageDisplay.textContent = `Page ${currentTxnPage} of ${totalTxnPages}`;
         if (prevBtn) prevBtn.disabled = currentTxnPage <= 1;
         if (nextBtn) nextBtn.disabled = currentTxnPage >= totalTxnPages;
@@ -388,17 +480,14 @@ async function saveEntry() {
     const url = `http://127.0.0.1:8000/transaction?date=${date}&bill_no=${bill}&party=${partyParam}&txn_type=${type}&mode=${mode}&amount=${amount}`;
 
     try {
-        console.time('saveEntry-POST');
-        const res = await fetch(url, { method: "POST" });
+        const res = await fetchWithTimeout(url, { method: "POST" });
         const data = await res.json();
-        console.timeEnd('saveEntry-POST');
 
         const statusText = (data.status || "").toString().trim().toLowerCase();
         if (statusText.includes("added") || statusText.includes("saved") || statusText.includes("success")) {
             showToast("Entry Saved Successfully!", "success");
-            console.time('saveEntry-reload');
-            await loadTransactions(currentTxnPage);
-            console.timeEnd('saveEntry-reload');
+            invalidateTxnCache();
+            await loadTransactions(currentTxnPage, true);
             
             // Auto-increment bill number
             const currentBill = bill;
@@ -543,19 +632,19 @@ async function loadLedgerReport() {
         let debit = '';
         let credit = '';
         if (debitTypes.has(type)) {
-            debit = amt.toFixed(2);
+            debit = formatMoney(amt);
             runningBalance += amt;
         } else if (creditTypes.has(type)) {
-            credit = amt.toFixed(2);
+            credit = formatMoney(amt);
             runningBalance -= amt;
         } else {
-            debit = amt.toFixed(2);
+            debit = formatMoney(amt);
             runningBalance += amt;
         }
 
         const balanceLabel = runningBalance < 0
-            ? `${Math.abs(runningBalance).toFixed(2)} Cr`
-            : `${runningBalance.toFixed(2)} Dr`;
+            ? `${formatMoney(Math.abs(runningBalance))} Cr`
+            : `${formatMoney(runningBalance)} Dr`;
 
         tbody.innerHTML += `
         <tr>
@@ -693,7 +782,8 @@ async function updateTransaction(id, date, bill, party, type, mode, amount) {
         cancelEdit();
         
         // Reload transactions
-        await loadTransactions(currentTxnPage);
+        invalidateTxnCache();
+        await loadTransactions(currentTxnPage, true);
         updateDashboard();
         
     } catch (e) {
@@ -804,7 +894,8 @@ async function submitTxnEdit() {
             // Small delay to let DOM settle before reload
             setTimeout(() => {
                 if (isViewActive('ledgerView')) loadLedgerReport();
-                loadTransactions(currentTxnPage);
+                invalidateTxnCache();
+                loadTransactions(currentTxnPage, true);
                 updateDashboard();
             }, 50);
         } else {
@@ -863,7 +954,7 @@ async function performDelete(id) {
     isDeleting = true;
     
     try {
-        const res = await fetch("http://127.0.0.1:8000/transaction/delete", {
+        const res = await fetchWithTimeout("http://127.0.0.1:8000/transaction/delete", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -878,7 +969,8 @@ async function performDelete(id) {
             
             // Reload data
             if (isViewActive('ledgerView')) loadLedgerReport();
-            await loadTransactions(currentTxnPage);
+            invalidateTxnCache();
+            await loadTransactions(currentTxnPage, true);
             updateDashboard();
             unlockUiAfterModal();
             
@@ -1061,16 +1153,16 @@ async function showDashboard() {
         const res = await fetchWithTimeout("http://127.0.0.1:8000/report/dashboard", {}, 5000);
         const data = await res.json();
 
-        document.getElementById("dashSalesToday").innerText = data.sales_today.toFixed(2);
-        document.getElementById("dashSalesMonth").innerText = data.sales_month.toFixed(2);
-        document.getElementById("dashCash").innerText = data.cash_balance.toFixed(2);
-        document.getElementById("dashBank").innerText = data.bank_balance.toFixed(2);
-        document.getElementById("dashReceivables").innerText = data.receivables.toFixed(2);
+        document.getElementById("dashSalesToday").innerText = formatMoney(data.sales_today);
+        document.getElementById("dashSalesMonth").innerText = formatMoney(data.sales_month);
+        document.getElementById("dashCash").innerText = formatMoney(data.cash_balance);
+        document.getElementById("dashBank").innerText = formatMoney(data.bank_balance);
+        document.getElementById("dashReceivables").innerText = formatMoney(data.receivables);
         const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
         const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
         const totalFundsEl = document.getElementById("dashTotalFunds");
         const cashRatioEl = document.getElementById("dashCashRatio");
-        if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
+        if (totalFundsEl) totalFundsEl.innerText = formatMoney(totalFunds);
         if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
 
         renderCharts(data);
@@ -1113,16 +1205,16 @@ async function updateDashboard() {
         const bank = document.getElementById("dashBank");
         const receivables = document.getElementById("dashReceivables");
 
-        if (salesToday) salesToday.innerText = Number(data.sales_today || 0).toFixed(2);
-        if (salesMonth) salesMonth.innerText = Number(data.sales_month || 0).toFixed(2);
-        if (cash) cash.innerText = Number(data.cash_balance || 0).toFixed(2);
-        if (bank) bank.innerText = Number(data.bank_balance || 0).toFixed(2);
-        if (receivables) receivables.innerText = Number(data.receivables || 0).toFixed(2);
+        if (salesToday) salesToday.innerText = formatMoney(data.sales_today || 0);
+        if (salesMonth) salesMonth.innerText = formatMoney(data.sales_month || 0);
+        if (cash) cash.innerText = formatMoney(data.cash_balance || 0);
+        if (bank) bank.innerText = formatMoney(data.bank_balance || 0);
+        if (receivables) receivables.innerText = formatMoney(data.receivables || 0);
         const totalFunds = (Number(data.cash_balance || 0) + Number(data.bank_balance || 0));
         const cashRatio = totalFunds > 0 ? (Number(data.cash_balance || 0) / totalFunds) * 100 : 0;
         const totalFundsEl = document.getElementById("dashTotalFunds");
         const cashRatioEl = document.getElementById("dashCashRatio");
-        if (totalFundsEl) totalFundsEl.innerText = totalFunds.toFixed(2);
+        if (totalFundsEl) totalFundsEl.innerText = formatMoney(totalFunds);
         if (cashRatioEl) cashRatioEl.innerText = `${cashRatio.toFixed(1)}%`;
 
         const salesCanvas = document.getElementById('salesChart');
@@ -1357,6 +1449,74 @@ function showDayBook() {
     showView('dayBookView');
 }
 
+let dayBookRows = [];
+const DAYBOOK_ROW_HEIGHT = 36;
+const DAYBOOK_OVERSCAN = 8;
+let dayBookVirtualInitialized = false;
+
+function initDayBookVirtualScroll() {
+    if (dayBookVirtualInitialized) return;
+    const container = document.getElementById('dayBookTableContainer');
+    if (!container) return;
+    dayBookVirtualInitialized = true;
+    let ticking = false;
+    container.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+            renderVirtualizedDayBook();
+            ticking = false;
+        });
+    });
+}
+
+function renderVirtualizedDayBook(resetScroll = false) {
+    const container = document.getElementById('dayBookTableContainer');
+    const tbody = document.getElementById('dayBookBody');
+    if (!container || !tbody) return;
+
+    if (resetScroll) {
+        container.scrollTop = 0;
+    }
+
+    const data = dayBookRows || [];
+    const total = data.length;
+    const containerHeight = container.clientHeight || 520;
+    const scrollTop = container.scrollTop || 0;
+
+    const start = Math.max(0, Math.floor(scrollTop / DAYBOOK_ROW_HEIGHT) - DAYBOOK_OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / DAYBOOK_ROW_HEIGHT) + DAYBOOK_OVERSCAN * 2;
+    const end = Math.min(total, start + visibleCount);
+
+    const topPad = start * DAYBOOK_ROW_HEIGHT;
+    const bottomPad = Math.max(0, (total - end) * DAYBOOK_ROW_HEIGHT);
+    const colspan = 6;
+
+    let rowsHTML = '';
+    if (topPad > 0) {
+        rowsHTML += `<tr class="daybook-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    for (let i = start; i < end; i += 1) {
+        const row = data[i];
+        rowsHTML += `
+        <tr>
+            <td>${formatDateShort(row.date)}</td>
+            <td>${row.bill_no || ''}</td>
+            <td>${row.party}</td>
+            <td>${row.type}</td>
+            <td>${row.mode}</td>
+            <td class="text-right">${formatMoney(row.amount)}</td>
+        </tr>`;
+    }
+
+    if (bottomPad > 0) {
+        rowsHTML += `<tr class="daybook-spacer"><td colspan="${colspan}" style="height:${bottomPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    tbody.innerHTML = rowsHTML;
+}
+
 async function loadDayBook() {
     const dateInput = document.getElementById('dayBookDate');
     const date = dateInput ? dateInput.value : '';
@@ -1404,20 +1564,9 @@ async function loadDayBookFallback(date) {
 }
 
 function renderDayBookRows(rows) {
-    const tbody = document.getElementById('dayBookBody');
-    tbody.innerHTML = '';
-
-    rows.forEach(row => {
-        tbody.innerHTML += `
-        <tr>
-            <td>${formatDateShort(row.date)}</td>
-            <td>${row.bill_no || ''}</td>
-            <td>${row.party}</td>
-            <td>${row.type}</td>
-            <td>${row.mode}</td>
-            <td class="text-right">${Number(row.amount).toFixed(2)}</td>
-        </tr>`;
-    });
+    dayBookRows = rows || [];
+    initDayBookVirtualScroll();
+    renderVirtualizedDayBook(true);
 }
 
 function exportDayBook() {
@@ -1554,7 +1703,7 @@ async function showModeReport(mode) {
     const tbody = document.getElementById("modeReportBody");
     tbody.innerHTML = "";
     data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.type}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.type}</td><td class="text-right">${formatMoney(row.amount)}</td></tr>`;
     });
 }
 
@@ -1565,7 +1714,7 @@ async function showExpenseReport() {
     const tbody = document.getElementById("expenseReportBody");
     tbody.innerHTML = "";
     data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.mode}</td><td class="text-right">${row.amount.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.mode}</td><td class="text-right">${formatMoney(row.amount)}</td></tr>`;
     });
 }
 
@@ -1573,15 +1722,37 @@ async function showOutstanding() {
     showView('outstandingView');
     const res = await fetchWithTimeout("http://127.0.0.1:8000/report/outstanding");
     const result = await res.json();
-    const tbody = document.getElementById("outstandingBody");
+    outstandingData = result.data || [];
     const totalSpan = document.getElementById("totalOutstanding");
-    
-    tbody.innerHTML = "";
-    result.data.forEach(row => {
-        tbody.innerHTML += `<tr><td>${row.party}</td><td class="text-right">${row.balance.toFixed(2)}</td></tr>`;
+    if (totalSpan) totalSpan.textContent = `₹${formatMoney(result.total)}`;
+    renderOutstanding();
+}
+
+let outstandingData = [];
+
+function renderOutstanding() {
+    const tbody = document.getElementById("outstandingBody");
+    if (!tbody) return;
+    const sortEl = document.getElementById("outstandingSort");
+    const sortValue = sortEl ? sortEl.value : 'name-asc';
+
+    const sorted = (outstandingData || []).slice().sort((a, b) => {
+        if (sortValue === 'name-desc') {
+            return String(b.party || '').localeCompare(String(a.party || ''), 'en', { sensitivity: 'base' });
+        }
+        if (sortValue === 'amount-desc') {
+            return Number(b.balance || 0) - Number(a.balance || 0);
+        }
+        if (sortValue === 'amount-asc') {
+            return Number(a.balance || 0) - Number(b.balance || 0);
+        }
+        return String(a.party || '').localeCompare(String(b.party || ''), 'en', { sensitivity: 'base' });
     });
-    
-    totalSpan.textContent = `₹${result.total.toFixed(2)}`;
+
+    tbody.innerHTML = '';
+    sorted.forEach(row => {
+        tbody.innerHTML += `<tr><td>${row.party}</td><td class="text-right">${formatMoney(row.balance)}</td></tr>`;
+    });
 }
 
 async function showTrialBalance() {
@@ -1593,18 +1764,18 @@ async function showTrialBalance() {
     let tD = 0, tC = 0;
     data.forEach(row => {
         tD += row.debit; tC += row.credit;
-        tbody.innerHTML += `<tr><td>${row.account}</td><td>${row.debit.toFixed(2)}</td><td>${row.credit.toFixed(2)}</td></tr>`;
+        tbody.innerHTML += `<tr><td>${row.account}</td><td>${formatMoney(row.debit)}</td><td>${formatMoney(row.credit)}</td></tr>`;
     });
-    tbody.innerHTML += `<tr style="font-weight:bold"><td>TOTAL</td><td>${tD.toFixed(2)}</td><td>${tC.toFixed(2)}</td></tr>`;
+    tbody.innerHTML += `<tr style="font-weight:bold"><td>TOTAL</td><td>${formatMoney(tD)}</td><td>${formatMoney(tC)}</td></tr>`;
 }
 
 async function showPnL() {
     showView('pnlView');
     const res = await fetchWithTimeout("http://127.0.0.1:8000/report/pnl");
     const data = await res.json();
-    document.getElementById("pnlSales").innerText = data.sales.toFixed(2);
-    document.getElementById("pnlExpenses").innerText = data.expenses.toFixed(2);
-    document.getElementById("pnlProfit").innerText = data.net_profit.toFixed(2);
+    document.getElementById("pnlSales").innerText = formatMoney(data.sales);
+    document.getElementById("pnlExpenses").innerText = formatMoney(data.expenses);
+    document.getElementById("pnlProfit").innerText = formatMoney(data.net_profit);
     document.getElementById("pnlProfit").style.color = data.net_profit >= 0 ? "var(--success)" : "var(--danger)";
 }
 
@@ -2258,21 +2429,82 @@ function showAuditLogs() {
     showView('auditView');
 }
 
+let auditLogsData = [];
+const AUDIT_ROW_HEIGHT = 32;
+const AUDIT_OVERSCAN = 8;
+let auditVirtualInitialized = false;
+
+function initAuditVirtualScroll(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (!auditVirtualInitialized) {
+        auditVirtualInitialized = true;
+    }
+    let ticking = false;
+    container.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+            renderAuditVirtual(containerId);
+            ticking = false;
+        });
+    }, { passive: true });
+}
+
+function renderAuditVirtual(containerId, resetScroll = false) {
+    const container = document.getElementById(containerId);
+    const tbodyId = containerId === 'auditTableContainerView' ? 'auditTableBodyView' : 'auditTableBody';
+    const tbody = document.getElementById(tbodyId);
+    if (!container || !tbody) return;
+
+    if (resetScroll) {
+        container.scrollTop = 0;
+    }
+
+    const data = auditLogsData || [];
+    const total = data.length;
+    const containerHeight = container.clientHeight || 420;
+    const scrollTop = container.scrollTop || 0;
+
+    const start = Math.max(0, Math.floor(scrollTop / AUDIT_ROW_HEIGHT) - AUDIT_OVERSCAN);
+    const visibleCount = Math.ceil(containerHeight / AUDIT_ROW_HEIGHT) + AUDIT_OVERSCAN * 2;
+    const end = Math.min(total, start + visibleCount);
+
+    const topPad = start * AUDIT_ROW_HEIGHT;
+    const bottomPad = Math.max(0, (total - end) * AUDIT_ROW_HEIGHT);
+    const colspan = 4;
+
+    let rowsHTML = '';
+    if (topPad > 0) {
+        rowsHTML += `<tr class="audit-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    for (let i = start; i < end; i += 1) {
+        const l = data[i];
+        rowsHTML += `
+        <tr>
+            <td>${new Date(l.timestamp).toLocaleString()}</td>
+            <td>${l.username}</td>
+            <td>${l.action}</td>
+            <td>${l.details}</td>
+        </tr>`;
+    }
+
+    if (bottomPad > 0) {
+        rowsHTML += `<tr class="audit-spacer"><td colspan="${colspan}" style="height:${bottomPad}px; border:none; padding:0;"></td></tr>`;
+    }
+
+    tbody.innerHTML = rowsHTML;
+}
+
 async function loadAuditLog(targetBodyId = 'auditTableBody') {
-    const tbody = document.getElementById(targetBodyId);
     try {
         const res = await fetchWithTimeout('http://127.0.0.1:8000/audit');
         const logs = await res.json();
-        tbody.innerHTML = '';
-        logs.forEach(l => {
-            tbody.innerHTML += `
-            <tr>
-                <td>${new Date(l.timestamp).toLocaleString()}</td>
-                <td>${l.username}</td>
-                <td>${l.action}</td>
-                <td>${l.details}</td>
-            </tr>`;
-        });
+        auditLogsData = logs || [];
+        const containerId = targetBodyId === 'auditTableBodyView' ? 'auditTableContainerView' : 'auditTableContainer';
+        initAuditVirtualScroll(containerId);
+        renderAuditVirtual(containerId, true);
     } catch (e) { showToast("Error: " + e.message, "error"); }
 }
 

@@ -190,6 +190,9 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h2>Daily Transactions <span id="txnPageInfo" style="font-size: 14px; font-weight: normal; color: var(--text-secondary);"></span></h2>
                     <div style="display: flex; gap: 8px; align-items: center;">
+                        <button id="txnRangeToggleBtn" class="secondary" onclick="toggleTxnRange()" title="Toggle date range" style="padding: 6px 10px;">
+                            Last 30 Days
+                        </button>
                         <button onclick="loadTransactions(currentTxnPage - 1)" id="prevPageBtn" class="icon-btn" title="Previous Page" style="padding: 6px 10px;">
                             <ion-icon name="chevron-back-outline"></ion-icon>
                         </button>
@@ -202,7 +205,7 @@
                     </div>
                 </div>
                 <div class="card" style="margin: 12px 0; padding: 12px;">
-                    <div style="display:grid; grid-template-columns: 140px 160px 1fr 140px 140px 160px; gap: 10px; align-items:center;">
+                    <div style="display:grid; grid-template-columns: 140px 140px 2.5fr 140px 120px 140px; gap: 10px; align-items:center;">
                         <input type="date" id="newDate" onkeydown="handleEntryNavigation(event, 'newBill')">
                         <input type="text" id="newBill" placeholder="Ref/Bill" onkeydown="handleEntryNavigation(event, 'newParty')">
                         <input type="text" id="newParty" list="partyList" placeholder="Select Party" value="Customer" onkeydown="handleEntryNavigation(event, 'newType')" onfocus="if(this.value==='Customer') this.value=''; this.select();" onblur="if(this.value==='') this.value='Customer';">
@@ -226,19 +229,21 @@
                         Press <b>Enter</b> to navigate fields. Press <b>Enter</b> in Amount to Save.
                     </div>
                 </div>
-                <table id="entryTable">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Bill No</th>
-                            <th>Party</th>
-                            <th>Type</th>
-                            <th>Mode</th>
-                            <th>Amount</th>
-                        </tr>
-                    </thead>
-                    <tbody id="transactionList"></tbody>
-                </table>
+                <div id="txnTableContainer" class="txn-table-container">
+                    <table id="entryTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Bill No</th>
+                                <th>Party</th>
+                                <th>Type</th>
+                                <th>Mode</th>
+                                <th>Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactionList"></tbody>
+                    </table>
+                </div>
             </div>
 
             <!-- Dashboard View -->
@@ -415,19 +420,21 @@
                         onkeyup="filterTable('dayBookTable', this.value)" style="width: 200px;">
                 </div>
 
-                <table id="dayBookTable">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Bill</th>
-                            <th>Party</th>
-                            <th>Type</th>
-                            <th>Mode</th>
-                            <th class="text-right">Amount</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dayBookBody"></tbody>
-                </table>
+                <div id="dayBookTableContainer" class="daybook-table-container">
+                    <table id="dayBookTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Bill</th>
+                                <th>Party</th>
+                                <th>Type</th>
+                                <th>Mode</th>
+                                <th class="text-right">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dayBookBody"></tbody>
+                    </table>
+                </div>
             </div>
 
             <!-- Daily Summary View -->
@@ -527,13 +534,22 @@
             <div id="outstandingView" class="view-section">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h2>Credit Outstanding</h2>
-                    <input type="text" placeholder="Search..."
-                        onkeyup="filterTable('outstandingBody', this.value, true)" style="width: 200px;">
+                    <div style="display:flex; gap: 10px; align-items:center;">
+                        <button class="secondary" onclick="exportTableToExcel('outstandingTable', 'Credit_Outstanding')">Export Excel</button>
+                        <select id="outstandingSort" onchange="renderOutstanding()" style="padding: 6px 10px;">
+                            <option value="name-asc">A → Z</option>
+                            <option value="name-desc">Z → A</option>
+                            <option value="amount-desc">Amount ↓</option>
+                            <option value="amount-asc">Amount ↑</option>
+                        </select>
+                        <input type="text" placeholder="Search..."
+                            onkeyup="filterTable('outstandingBody', this.value, true)" style="width: 200px;">
+                    </div>
                 </div>
                 <div style="margin: 12px 0; padding: 16px; background: var(--card-bg); border-radius: 8px; font-size: 18px; font-weight: bold; text-align: center;">
                     Total Outstanding: <span id="totalOutstanding" style="color: #FF6B6B;">₹0.00</span>
                 </div>
-                <table>
+                <table id="outstandingTable">
                     <thead>
                         <tr>
                             <th>Party</th>
@@ -597,7 +613,7 @@
                 </div>
 
                 <div class="card" style="padding: 0;">
-                    <div style="max-height: 70vh; overflow-y: auto;">
+                    <div id="auditTableContainerView" class="audit-table-container">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -731,7 +747,7 @@
                     <!-- Audit Log -->
                     <div class="card">
                         <h3>Audit Log</h3>
-                        <div style="max-height: 300px; overflow-y: auto;">
+                        <div id="auditTableContainer" class="audit-table-container" style="max-height: 300px;">
                             <table class="data-table">
                                 <thead>
                                     <tr>

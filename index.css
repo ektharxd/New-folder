@@ -366,6 +366,95 @@ table {
     margin-top: 20px;
 }
 
+.txn-table-container {
+    max-height: calc(100vh - 260px);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    background: var(--surface);
+    margin-top: 20px;
+    overflow-anchor: none;
+}
+
+.txn-table-container table {
+    margin-top: 0;
+    box-shadow: none;
+    border-radius: 0;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+
+#entryTable th,
+#entryTable td {
+    height: 36px;
+    line-height: 36px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.txn-spacer td {
+    border: none !important;
+    padding: 0 !important;
+}
+
+.daybook-table-container {
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    background: var(--surface);
+    margin-top: 20px;
+    overflow-anchor: none;
+}
+
+.daybook-table-container table {
+    margin-top: 0;
+    box-shadow: none;
+    border-radius: 0;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+
+#dayBookTable th,
+#dayBookTable td {
+    height: 36px;
+    line-height: 36px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.daybook-spacer td {
+    border: none !important;
+    padding: 0 !important;
+}
+
+.audit-table-container {
+    max-height: calc(120vh - 300px);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    background: var(--surface);
+    overflow-anchor: none;
+}
+
+.audit-table-container table {
+    margin-top: 0;
+    box-shadow: none;
+    border-radius: 0;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+
+.audit-spacer td {
+    border: none !important;
+    padding: 0 !important;
+}
+
 /* Global table grid lines */
 table th,
 table td {
@@ -515,20 +604,24 @@ td.text-right {
     display: flex;
     justify-content: flex-end;
     gap: 6px;
+    align-items: center;
+    white-space: nowrap;
 }
 
 .btn-action {
-    padding: 4px 8px;
+    padding: 0 10px;
     font-size: 12px;
     border: 1px solid #E5E7EB;
     border-radius: 6px;
     cursor: pointer;
     color: #111827;
     line-height: 1;
-    min-width: 52px;
+    min-width: 72px;
+    height: 28px;
     text-align: center;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
     background: #fff;
     box-shadow: 0 2px 6px rgba(17, 24, 39, 0.08);

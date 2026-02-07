@@ -148,6 +148,14 @@ def init_db(company_name: str):
         CREATE INDEX idx_transactions_mode ON transactions(payment_mode)
     """)
     cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_transactions_bill_no' AND object_id = OBJECT_ID('transactions'))
+        CREATE INDEX idx_transactions_bill_no ON transactions(bill_no)
+    """)
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_transactions_date_id' AND object_id = OBJECT_ID('transactions'))
+        CREATE INDEX idx_transactions_date_id ON transactions(txn_date DESC, txn_id DESC)
+    """)
+    cursor.execute("""
         IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_parties_normalized' AND object_id = OBJECT_ID('parties'))
         CREATE INDEX idx_parties_normalized ON parties(normalized_name)
     """)
@@ -448,22 +456,39 @@ def get_parties():
     conn.close()
     return data
 @app.get("/transactions")
-def get_transactions(page: int = 1, limit: int = 100):
+def get_transactions(page: int = 1, limit: int = 50, days: int = 30, from_date: Optional[str] = None, to_date: Optional[str] = None):
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    where_clauses = []
+    params = []
+
+    if from_date:
+        where_clauses.append("t.txn_date >= ?")
+        params.append(from_date)
+    if to_date:
+        where_clauses.append("t.txn_date <= ?")
+        params.append(to_date)
+
+    if not where_clauses and days and days > 0:
+        where_clauses.append("t.txn_date >= DATEADD(day, ?, CAST(GETDATE() AS date))")
+        params.append(-days)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     
     # Get total count
-    cursor.execute("SELECT COUNT(*) FROM transactions")
+    cursor.execute(f"SELECT COUNT(*) FROM transactions t WITH (NOLOCK) {where_sql}", params)
     total = cursor.fetchone()[0]
     
     offset = (page - 1) * limit
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT t.txn_id, t.txn_date, t.bill_no, p.name, t.txn_type, t.payment_mode, t.amount
         FROM transactions t WITH (NOLOCK)
         JOIN parties p WITH (NOLOCK) ON t.party_id = p.party_id
+        {where_sql}
         ORDER BY t.txn_date DESC, t.txn_id DESC
         OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-    """, (offset, limit))
+    """, (*params, offset, limit))
     rows = cursor.fetchall()
     conn.close()
     
