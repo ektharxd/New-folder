@@ -1,5 +1,5 @@
 const { ipcRenderer } = require('electron');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 // Global cache for party types
 const partyTypes = {};
@@ -188,6 +188,17 @@ async function loadTransactions(page = 1) {
         currentTxnPage = response.page || 1;
         totalTxnPages = response.total_pages || 1;
 
+        // Ensure latest-first: date desc, then bill desc
+        const sortedData = [...data].sort((a, b) => {
+            const da = new Date(a.date || 0).getTime();
+            const db = new Date(b.date || 0).getTime();
+            if (da !== db) return db - da;
+            const ba = getBillSortValue(a.bill_no);
+            const bb = getBillSortValue(b.bill_no);
+            if (ba !== bb) return bb - ba;
+            return String(b.bill_no || '').localeCompare(String(a.bill_no || ''));
+        });
+
         const tbody = document.getElementById("transactionList");
         
         // Admin Edit Column Header (Recent Transactions Table)
@@ -206,7 +217,7 @@ async function loadTransactions(page = 1) {
 
         // Build HTML string first, then set once - MUCH faster
         let rowsHTML = "";
-        data.forEach(txn => {
+        sortedData.forEach(txn => {
             let actionCell = "";
             if (currentRole === 'admin') {
                 actionCell = `<td class="action-cell">
@@ -292,6 +303,12 @@ function incrementBillNumber(billNo) {
     const paddedNumber = incremented.padStart(numberLength, '0');
     
     return prefix + paddedNumber;
+}
+
+function getBillSortValue(billNo) {
+    const str = (billNo || '').toString().trim();
+    const match = str.match(/(\d+)(?!.*\d)/);
+    return match ? parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
 }
 
 async function saveEntry() {
@@ -1791,12 +1808,16 @@ async function exportTableToExcel(tableId, filename = '', sheetName = 'Report') 
         const table = document.getElementById(tableId);
         if (!table) return showToast("Table not found to export", "error");
 
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.table_to_sheet(table);
-
         // Sanitize sheet name
         const safeSheetName = (sheetName || "Report").replace(/[\/\\\?\*\[\]]/g, "_").substring(0, 31);
-        XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet(safeSheetName);
+
+        const rows = Array.from(table.querySelectorAll('tr'))
+            .map((row) => Array.from(row.querySelectorAll('th, td'))
+                .map((cell) => cell.innerText.trim()))
+            .filter((row) => row.length > 0);
+        rows.forEach((row) => ws.addRow(row));
 
         const defaultName = filename ? filename + '.xlsx' : 'report.xlsx';
 
@@ -1804,7 +1825,7 @@ async function exportTableToExcel(tableId, filename = '', sheetName = 'Report') 
         const filePath = await ipcRenderer.invoke('dialog:save', defaultName);
         if (!filePath) return; // User canceled
 
-        XLSX.writeFile(wb, filePath);
+        await wb.xlsx.writeFile(filePath);
         showToast("Export Saved!", "success");
     } catch (e) {
         showToast("Export Failed: " + e.message, "error");
