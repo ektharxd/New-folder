@@ -6,6 +6,14 @@ const net = require('net');
 const fs = require('fs');
 const http = require('http');
 
+let autoUpdaterRef = null;
+
+function sendUpdateStatus(payload) {
+    if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('update:status', payload);
+    }
+}
+
 let mainWindow;
 let splashWindow;
 let backendProcess = null;
@@ -43,7 +51,19 @@ function createMainWindow() {
     });
     mainWindow.loadFile('index.html');
 
-    
+    if (autoUpdaterRef) {
+        autoUpdaterRef.on('checking-for-update', () => sendUpdateStatus({ type: 'checking', message: 'Checking for updates...' }));
+        autoUpdaterRef.on('update-available', (info) => sendUpdateStatus({ type: 'available', message: `Update available: v${info.version}` }));
+        autoUpdaterRef.on('update-not-available', () => sendUpdateStatus({ type: 'none', message: 'You are up to date.' }));
+        autoUpdaterRef.on('error', (err) => sendUpdateStatus({ type: 'error', message: `Update error: ${err.message}` }));
+        autoUpdaterRef.on('download-progress', (p) => {
+            const percent = Math.round(p.percent || 0);
+            sendUpdateStatus({ type: 'progress', message: `Downloading update... ${percent}%`, percent });
+        });
+        autoUpdaterRef.on('update-downloaded', () => {
+            sendUpdateStatus({ type: 'downloaded', message: 'Update downloaded. Restart to install.' });
+        });
+    }
 
     mainWindow.once('ready-to-show', () => {
         setTimeout(() => {
@@ -239,6 +259,41 @@ ipcMain.handle('dialog:openBackup', async () => {
 
 ipcMain.handle('app:getUserDataPath', async () => {
     return app.getPath('userData');
+});
+
+ipcMain.handle('app:getVersion', async () => {
+    return app.getVersion();
+});
+
+ipcMain.handle('update:check', async () => {
+    try {
+        if (!autoUpdaterRef) {
+            try {
+                ({ autoUpdater: autoUpdaterRef } = require('electron-updater'));
+                autoUpdaterRef.autoDownload = true;
+                autoUpdaterRef.autoInstallOnAppQuit = true;
+            } catch (e) {
+                return { status: 'Auto-updater not available', error: e.message };
+            }
+        }
+
+        await autoUpdaterRef.checkForUpdates();
+        return { status: 'Checking for updates...' };
+    } catch (e) {
+        return { status: 'Update check failed', error: e.message };
+    }
+});
+
+ipcMain.handle('update:restart', async () => {
+    try {
+        if (autoUpdaterRef) {
+            autoUpdaterRef.quitAndInstall();
+            return { status: 'Restarting to install update...' };
+        }
+        return { status: 'No update ready to install.' };
+    } catch (e) {
+        return { status: 'Restart failed', error: e.message };
+    }
 });
 
 ipcMain.handle('folder:openAutoBackup', async () => {

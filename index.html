@@ -9,6 +9,7 @@
     <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/svg+xml" href="assets/finlogs.svg">
     <link rel="icon" type="image/x-icon" href="assets/finlogs.ico">
     <link rel="stylesheet" href="index.css">
@@ -28,31 +29,47 @@
     <!-- Simple Login Screen -->
     <div id="loginModal" class="login-background" style="display: flex;">
         <div class="login-glass-card">
-            <h2 class="login-title">M-Finlogs</h2>
-            <p class="login-subtitle">Sign in to your account</p>
+            <div class="login-hero">
+                <img src="assets/finlogs.svg" alt="Finlogs">
+            </div>
+            <div class="login-brand">M-Finlogs</div>
+            <h2 class="login-title">Sign in to continue</h2>
+            <p class="login-subtitle">Manage your entries, reports, and backups in one place.</p>
 
             <div class="input-group">
                 <label>Company</label>
-                <select id="loginCompany" class="login-input"></select>
+                <div class="login-field">
+                    <ion-icon name="business-outline"></ion-icon>
+                    <select id="loginCompany" class="login-input"></select>
+                </div>
             </div>
 
             <div class="input-group">
                 <label>Create Company</label>
-                <div style="display:flex; gap:8px;">
-                    <input type="text" id="newCompanyName" class="login-input" placeholder="New company name">
-                    <button onclick="createCompany()" class="login-btn" style="width:auto; padding: 10px 14px;">Add</button>
+                <div class="login-inline">
+                    <div class="login-field">
+                        <ion-icon name="add-circle-outline"></ion-icon>
+                        <input type="text" id="newCompanyName" class="login-input" placeholder="New company name">
+                    </div>
+                    <button onclick="createCompany()" class="login-btn login-btn--ghost" type="button">Add</button>
                 </div>
             </div>
 
             <div class="input-group">
                 <label>Username</label>
-                <input type="text" id="loginUser" class="login-input" placeholder="Enter username" autocomplete="off">
+                <div class="login-field">
+                    <ion-icon name="person-outline"></ion-icon>
+                    <input type="text" id="loginUser" class="login-input" placeholder="Enter username" autocomplete="off">
+                </div>
             </div>
 
             <div class="input-group">
                 <label>Password</label>
-                <input type="password" id="loginPass" class="login-input" placeholder="Enter password"
-                    onkeydown="if(event.key==='Enter') handleLogin()">
+                <div class="login-field">
+                    <ion-icon name="lock-closed-outline"></ion-icon>
+                    <input type="password" id="loginPass" class="login-input" placeholder="Enter password"
+                        onkeydown="if(event.key==='Enter') handleLogin()">
+                </div>
             </div>
 
             <button onclick="handleLogin()" class="login-btn">Sign In</button>
@@ -655,6 +672,27 @@
                             <input type="checkbox" id="darkModeToggle" style="width: auto;" onclick="toggleDarkMode()">
                             Enable Dark Mode 🌙
                         </label>
+                    </div>
+                </div>
+                <br>
+
+                <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap: 16px;">
+                    <div>
+                        <h3 style="margin-bottom: 6px;">Software Update</h3>
+                        <div style="color: var(--text-secondary); font-size: 13px;">
+                            Keep M-Finlogs up to date with the latest improvements.
+                        </div>
+                        <div id="updateStatus" style="margin-top: 6px; font-size: 12px; color: var(--text-secondary);">Ready to check for updates.</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+                        <div id="updateVersionBadge" style="font-size: 12px; padding: 4px 8px; border-radius: 999px; background: #EEF2FF; color: #3730A3; border: 1px solid #C7D2FE;">
+                            Version: --
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button onclick="requestUpdateCheck()">Check for Updates</button>
+                            <button id="updateRestartBtn" class="secondary" onclick="requestUpdateRestart()" style="display:none;">Restart & Install</button>
+                        </div>
+                        <div id="updateLastChecked" style="font-size: 11px; color: var(--text-secondary);"></div>
                     </div>
                 </div>
                 <br>

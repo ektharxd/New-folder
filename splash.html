@@ -5,182 +5,146 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Starting...</title>
-    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="index.css">
-    <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --ink: #0b1020;
+            --accent: #f3c428;
+            --aqua: #ffffff;
+        }
+
         body {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 50%, #bed6bc 100%);
+            display: grid;
+            place-items: center;
             height: 100vh;
             margin: 0;
-            flex-direction: column;
             user-select: none;
             overflow: hidden;
-            position: relative;
-            font-family: 'Google Sans', sans-serif;
+            background: radial-gradient(circle at 18% 12%, #2a3752 0%, #141b2f 55%, #0a0f1f 100%);
+            font-family: 'Space Grotesk', sans-serif;
+            color: #e2e8f0;
         }
 
-        body::before {
+        .splash-stage {
+            position: relative;
+            width: min(720px, 92vw);
+            height: min(520px, 92vh);
+            display: grid;
+            place-items: center;
+            isolation: isolate;
+        }
+
+        .glow-orb {
+            position: absolute;
+            width: 320px;
+            height: 320px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(67, 217, 255, 0.22), transparent 60%);
+            top: 4%;
+            right: 6%;
+            filter: blur(2px);
+        }
+
+        .glow-orb.secondary {
+            width: 420px;
+            height: 420px;
+            left: -6%;
+            bottom: -10%;
+            background: radial-gradient(circle, rgba(243, 196, 40, 0.16), transparent 65%);
+        }
+
+        .ring {
+            position: absolute;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 50%;
+            width: 520px;
+            height: 520px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 60px rgba(67, 217, 255, 0.08);
+        }
+
+        .ring::after {
             content: "";
             position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+            inset: 24px;
             border-radius: 50%;
-            animation: pulse 8s ease-in-out infinite;
+            border: 1px dashed rgba(255, 255, 255, 0.12);
         }
 
-        body::after {
+        .mesh {
+            position: absolute;
+            inset: 8% 8% 14% 8%;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+            background-size: 48px 48px;
+            border-radius: 32px;
+            mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0.2) 70%, transparent 85%);
+        }
+
+        .beam {
+            position: absolute;
+            width: 620px;
+            height: 120px;
+            background: linear-gradient(90deg, transparent, rgba(67, 217, 255, 0.2), transparent);
+            transform: rotate(-18deg);
+            top: 22%;
+            left: -10%;
+            filter: blur(6px);
+        }
+
+        .beam.secondary {
+            background: linear-gradient(90deg, transparent, rgba(243, 196, 40, 0.18), transparent);
+            transform: rotate(22deg);
+            top: 56%;
+            left: 0;
+        }
+
+        .logo-badge {
+            position: relative;
+            width: 140px;
+            height: 140px;
+            border-radius: 28px;
+            background: linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04));
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: grid;
+            place-items: center;
+            box-shadow: 0 20px 45px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(18px);
+            z-index: 2;
+        }
+
+        .logo-badge::after {
             content: "";
             position: absolute;
-            bottom: -40%;
-            left: -15%;
-            width: 500px;
-            height: 500px;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
-            border-radius: 50%;
-            animation: pulse 10s ease-in-out infinite 2s;
+            inset: -12px;
+            border-radius: 34px;
+            border: 1px solid rgba(67, 217, 255, 0.18);
+            box-shadow: 0 0 28px rgba(67, 217, 255, 0.2);
+            pointer-events: none;
         }
 
-        .logo-container {
-            text-align: center;
-            animation: fadeIn 1s ease-out;
-            position: relative;
-            z-index: 1;
-        }
-
-        .logo-icon {
-            width: 72px;
-            height: 72px;
-            margin-bottom: 20px;
-            filter: drop-shadow(0 4px 12px rgba(59, 130, 246, 0.4));
-            animation: float 3s ease-in-out infinite;
-        }
-
-        h1 {
-            font-size: 32px;
-            margin: 0;
-            color: #0F172A;
-            font-weight: 700;
-            letter-spacing: -0.5px;
-            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-        }
-
-        p {
-            color: #475569;
-            margin-top: 8px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .math-clipart {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            width: 100px;
-            height: 100px;
-            opacity: 0.12;
-            z-index: 0;
-        }
-
-        /* Loader */
-        .loader {
-            width: 240px;
-            height: 3px;
-            background: rgba(148, 163, 184, 0.2);
-            border-radius: 3px;
-            margin-top: 32px;
-            overflow: hidden;
-            position: relative;
-            z-index: 1;
-        }
-
-        .loader-bar {
-            height: 100%;
-            background: linear-gradient(90deg, #3B82F6, #6366F1);
-            width: 0%;
-            border-radius: 3px;
-            animation: load 2.5s ease-in-out forwards;
-            box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
-        }
-
-        @keyframes load {
-            0% {
-                width: 0%;
-            }
-
-            50% {
-                width: 70%;
-            }
-
-            100% {
-                width: 100%;
-            }
-        }
-
-        @keyframes pulse {
-            0%, 100% { 
-                transform: scale(1);
-                opacity: 1;
-            }
-            50% { 
-                transform: scale(1.1);
-                opacity: 0.8;
-            }
-        }
-
-        @keyframes float {
-            0%, 100% {
-                transform: translateY(0px);
-            }
-            50% {
-                transform: translateY(-8px);
-            }
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        .splash-logo {
+            width: 84px;
+            height: 84px;
+            filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
         }
     </style>
 </head>
 
 <body>
-    <svg class="math-clipart" viewBox="0 0 200 200" aria-hidden="true">
-        <defs>
-            <linearGradient id="mathGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stop-color="#3B82F6" stop-opacity="0.4" />
-                <stop offset="100%" stop-color="#6366F1" stop-opacity="0.4" />
-            </linearGradient>
-        </defs>
-        <rect x="8" y="8" width="184" height="184" rx="20" fill="none" stroke="url(#mathGrad)" stroke-width="2" />
-        <text x="24" y="55" font-size="16" fill="url(#mathGrad)" font-family="Google Sans, sans-serif">log(x)</text>
-        <text x="24" y="82" font-size="14" fill="url(#mathGrad)" font-family="Google Sans, sans-serif">EKTHAR</text>
-        <text x="24" y="108" font-size="14" fill="url(#mathGrad)" font-family="Google Sans, sans-serif">∫ f(x) dx</text>
-        <text x="24" y="134" font-size="14" fill="url(#mathGrad)" font-family="Google Sans, sans-serif">Σ (i=1..n)</text>
-        <path d="M25 155 L85 155" stroke="url(#mathGrad)" stroke-width="2" />
-        <circle cx="120" cy="150" r="22" fill="none" stroke="url(#mathGrad)" stroke-width="2" />
-        <path d="M138 148 L160 132" stroke="url(#mathGrad)" stroke-width="2" />
-    </svg>
-    <div class="logo-container">
-        <img src="assets/finlogs.svg" class="logo-icon" alt="Finlogs Logo">
-        <h1>M-Finlogs</h1>
-        <p>Financial Management System</p>
-    </div>
-
-    <div class="loader">
-        <div class="loader-bar"></div>
+    <div class="splash-stage">
+        <div class="glow-orb"></div>
+        <div class="glow-orb secondary"></div>
+        <div class="mesh"></div>
+        <div class="ring"></div>
+        <div class="beam"></div>
+        <div class="beam secondary"></div>
+        <div class="logo-badge">
+            <img src="assets/finlogs.svg" class="splash-logo" alt="Finlogs Logo">
+        </div>
     </div>
 </body>
 

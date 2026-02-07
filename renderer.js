@@ -92,6 +92,9 @@ window.restartBackend = restartBackend;
 window.stopBackend = stopBackend;
 window.runAutoBackupNow = runAutoBackupNow;
 window.openAutoBackupFolder = openAutoBackupFolder;
+window.requestUpdateCheck = requestUpdateCheck;
+window.requestUpdateRestart = requestUpdateRestart;
+window.requestUpdateCheck = requestUpdateCheck;
 
 const PARTY_CACHE_TTL_MS = 5 * 60 * 1000;
 let partyCache = { data: null, ts: 0 };
@@ -1319,6 +1322,72 @@ function formatDateShort(dateStr) {
     return `${dd}-${mm}-${yyyy}`;
 }
 
+async function requestUpdateCheck() {
+    const statusEl = document.getElementById('updateStatus');
+    const lastCheckedEl = document.getElementById('updateLastChecked');
+    const restartBtn = document.getElementById('updateRestartBtn');
+    if (statusEl) statusEl.textContent = 'Checking for updates...';
+    try {
+        const res = await ipcRenderer.invoke('update:check');
+        if (statusEl) {
+            statusEl.textContent = res && res.status ? res.status : 'Update check completed.';
+        }
+        if (restartBtn) restartBtn.style.display = 'none';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Update check failed.';
+    } finally {
+        if (lastCheckedEl) lastCheckedEl.textContent = `Last checked: ${new Date().toLocaleString()}`;
+    }
+}
+
+async function requestUpdateRestart() {
+    const statusEl = document.getElementById('updateStatus');
+    try {
+        const res = await ipcRenderer.invoke('update:restart');
+        if (statusEl) statusEl.textContent = res && res.status ? res.status : 'Restarting...';
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Restart failed.';
+    }
+}
+
+async function initUpdateBadge() {
+    const badge = document.getElementById('updateVersionBadge');
+    if (!badge) return;
+    try {
+        const version = await ipcRenderer.invoke('app:getVersion');
+        badge.textContent = `Version: v${version}`;
+    } catch (e) {
+        badge.textContent = 'Version: --';
+    }
+}
+
+ipcRenderer.on('update:status', (_event, payload) => {
+    const statusEl = document.getElementById('updateStatus');
+    const restartBtn = document.getElementById('updateRestartBtn');
+    if (statusEl && payload && payload.message) {
+        statusEl.textContent = payload.message;
+    }
+    if (restartBtn) {
+        restartBtn.style.display = payload && payload.type === 'downloaded' ? 'inline-flex' : 'none';
+    }
+});
+
+async function requestUpdateCheck() {
+    const statusEl = document.getElementById('updateStatus');
+    const lastCheckedEl = document.getElementById('updateLastChecked');
+    if (statusEl) statusEl.textContent = 'Checking for updates...';
+    try {
+        const res = await ipcRenderer.invoke('update:check');
+        if (statusEl) {
+            statusEl.textContent = res && res.status ? res.status : 'Update check completed.';
+        }
+    } catch (e) {
+        if (statusEl) statusEl.textContent = 'Update check failed.';
+    } finally {
+        if (lastCheckedEl) lastCheckedEl.textContent = `Last checked: ${new Date().toLocaleString()}`;
+    }
+}
+
 // Dark Mode
 function toggleDarkMode() {
     const isDark = document.getElementById("darkModeToggle").checked;
@@ -1351,6 +1420,8 @@ window.onload = function () {
         document.documentElement.setAttribute('data-theme', 'dark');
         document.getElementById("darkModeToggle").checked = true;
     }
+
+    initUpdateBadge();
     
     // Failsafe: periodically check if modals are blocking the app
     setInterval(() => {
