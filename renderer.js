@@ -171,6 +171,9 @@ let allTransactions = [];
 const TXN_ROW_HEIGHT = 36;
 const TXN_OVERSCAN = 8;
 let txnVirtualInitialized = false;
+const TXN_HIGHLIGHT_TTL_MS = 24 * 60 * 60 * 1000;
+let txnHighlightMap = null;
+let editContext = null;
 // Guard flag to prevent concurrent loadTransactions calls
 // Multiple rapid calls cause DOM thrashing -> input fields freeze
 // Fixed: Only one loadTransactions can run at a time
@@ -190,6 +193,100 @@ function initTxnVirtualScroll() {
             ticking = false;
         });
     });
+}
+
+function loadTxnHighlights() {
+    if (txnHighlightMap) return txnHighlightMap;
+    try {
+        txnHighlightMap = JSON.parse(localStorage.getItem('txnHighlights') || '{}') || {};
+    } catch (e) {
+        txnHighlightMap = {};
+    }
+    return txnHighlightMap;
+}
+
+function saveTxnHighlights() {
+    if (!txnHighlightMap) return;
+    localStorage.setItem('txnHighlights', JSON.stringify(txnHighlightMap));
+}
+
+function pruneTxnHighlights() {
+    const map = loadTxnHighlights();
+    const now = Date.now();
+    let changed = false;
+    Object.keys(map).forEach((key) => {
+        if (!map[key] || (now - map[key].ts) > TXN_HIGHLIGHT_TTL_MS) {
+            delete map[key];
+            changed = true;
+        }
+    });
+    if (changed) saveTxnHighlights();
+}
+
+function markTxnHighlight(id, type) {
+    if (!id) return;
+    const map = loadTxnHighlights();
+    map[String(id)] = { type, ts: Date.now() };
+    saveTxnHighlights();
+}
+
+function getTxnHighlightClass(id) {
+    if (!id) return '';
+    const map = loadTxnHighlights();
+    const entry = map[String(id)];
+    if (!entry) return '';
+    if ((Date.now() - entry.ts) > TXN_HIGHLIGHT_TTL_MS) {
+        delete map[String(id)];
+        saveTxnHighlights();
+        return '';
+    }
+    return entry.type === 'edited' ? 'row-edited' : entry.type === 'deleted' ? 'row-deleted' : '';
+}
+
+function captureEditContext() {
+    const activeView = document.querySelector('.view-section.active');
+    const viewId = activeView ? activeView.id : 'entryView';
+    const txnContainer = document.getElementById('txnTableContainer');
+    const dayBookContainer = document.getElementById('dayBookTableContainer');
+    editContext = {
+        viewId,
+        txnScrollTop: txnContainer ? txnContainer.scrollTop : 0,
+        dayBookScrollTop: dayBookContainer ? dayBookContainer.scrollTop : 0
+    };
+}
+
+function restoreEditContext() {
+    if (!editContext) return;
+    const { viewId, txnScrollTop, dayBookScrollTop } = editContext;
+    editContext = null;
+
+    if (viewId === 'entryView') {
+        const container = document.getElementById('txnTableContainer');
+        if (container) container.scrollTop = txnScrollTop;
+        return;
+    }
+
+    if (viewId === 'dayBookView') {
+        showView('dayBookView', { skipLoad: true });
+        const nav = document.querySelector('a[onclick*="showDayBook"]');
+        if (nav) activateNav(nav);
+        refreshDayBookIfNeeded();
+        const container = document.getElementById('dayBookTableContainer');
+        if (container) container.scrollTop = dayBookScrollTop;
+        return;
+    }
+
+    if (viewId === 'ledgerView') {
+        showView('ledgerView', { skipLoad: true });
+        const nav = document.querySelector('a[onclick*="ledgerView"]');
+        if (nav) activateNav(nav);
+        loadLedgerReport();
+        return;
+    }
+
+    showView(viewId, { skipLoad: true });
+    const nav = document.querySelector(`a[onclick*="${viewId}"]`);
+    if (nav) activateNav(nav);
 }
 
 function renderVirtualizedTransactions(resetScroll = false) {
@@ -219,8 +316,10 @@ function renderVirtualizedTransactions(resetScroll = false) {
         rowsHTML += `<tr class="txn-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
     }
 
+    pruneTxnHighlights();
     for (let i = start; i < end; i += 1) {
         const txn = data[i];
+        const rowClass = getTxnHighlightClass(txn.id);
         let actionCell = "";
         if (currentRole === 'admin') {
             actionCell = `<td class="action-cell">
@@ -236,7 +335,7 @@ function renderVirtualizedTransactions(resetScroll = false) {
         }
 
         rowsHTML += `
-        <tr>
+        <tr${rowClass ? ` class="${rowClass}"` : ''}>
             <td>${formatDateShort(txn.date)}</td>
             <td>${txn.bill_no || ''}</td>
             <td>${txn.party}</td>
@@ -275,7 +374,8 @@ function toggleTxnRange() {
     loadTransactions(1);
 }
 
-async function loadTransactions(page = 1, force = false) {
+async function loadTransactions(page = 1, force = false, options = {}) {
+    const { resetScroll = true } = options;
     if (isLoadingTransactions) {
         return;
     }
@@ -340,7 +440,12 @@ async function loadTransactions(page = 1, force = false) {
 
         allTransactions = sortedData;
         initTxnVirtualScroll();
-        renderVirtualizedTransactions(true);
+        const container = document.getElementById('txnTableContainer');
+        const prevScrollTop = container ? container.scrollTop : 0;
+        renderVirtualizedTransactions(resetScroll);
+        if (!resetScroll && container) {
+            container.scrollTop = prevScrollTop;
+        }
 
         // Set default date if not set
         const dateInput = document.getElementById("newDate");
@@ -564,11 +669,16 @@ async function createParty() {
 }
 
 // View Switching
-function showView(viewId) {
+function showView(viewId, options = {}) {
+    const { skipLoad = false } = options;
     document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
     document.getElementById(viewId).classList.add('active');
     
     // Load data when switching to specific views
+    if (skipLoad) {
+        return;
+    }
+
     if (viewId === 'entryView') {
         loadTransactions();
     } else if (viewId === 'ledgerView') {
@@ -620,7 +730,9 @@ async function loadLedgerReport() {
 
     let runningBalance = 0;
 
+    pruneTxnHighlights();
     data.forEach(row => {
+        const rowClass = getTxnHighlightClass(row.id);
         let actionCell = "";
         if (currentRole === 'admin') {
             actionCell = `<td class="action-cell">
@@ -655,7 +767,7 @@ async function loadLedgerReport() {
             : `${formatMoney(runningBalance)} Dr`;
 
         tbody.innerHTML += `
-        <tr>
+        <tr${rowClass ? ` class="${rowClass}"` : ''}>
             <td>${formatDateShort(row.date)}</td>
             <td>${row.bill_no || ''}</td>
             <td>${particulars}</td>
@@ -672,6 +784,7 @@ let editingTransactionId = null;
 
 async function openEditModal(id) {
     try {
+        captureEditContext();
         // Try cached transactions first
         let txn = currentTransactionsCache.find(t => t.id == id);
 
@@ -690,7 +803,7 @@ async function openEditModal(id) {
         editingTransactionId = id;
         
         // Switch to entry view
-        showView('entryView');
+        showView('entryView', { skipLoad: true });
         activateNav(document.querySelector('a[onclick*="entryView"]'));
         
         // Pre-fill the form with transaction data
@@ -785,14 +898,17 @@ async function updateTransaction(id, date, bill, party, type, mode, amount) {
         }
         
         showToast("Transaction Updated Successfully!", "success");
+        markTxnHighlight(id, 'edited');
         
         // Reset edit mode
         cancelEdit();
         
         // Reload transactions
         invalidateTxnCache();
-        await loadTransactions(currentTxnPage, true);
+        await loadTransactions(currentTxnPage, true, { resetScroll: false });
         updateDashboard();
+        refreshDayBookIfNeeded();
+        restoreEditContext();
         
     } catch (e) {
         showToast("Error updating transaction: " + e, "error");
@@ -896,6 +1012,7 @@ async function submitTxnEdit() {
         const data = await res.json();
         if (data.status === "Updated Successfully") {
             showToast("Transaction Updated", "success");
+            markTxnHighlight(id, 'edited');
             closeEditModal();
             ensureAppInteractive();
             
@@ -903,8 +1020,10 @@ async function submitTxnEdit() {
             setTimeout(() => {
                 if (isViewActive('ledgerView')) loadLedgerReport();
                 invalidateTxnCache();
-                loadTransactions(currentTxnPage, true);
+                loadTransactions(currentTxnPage, true, { resetScroll: false });
                 updateDashboard();
+                refreshDayBookIfNeeded();
+                restoreEditContext();
             }, 50);
         } else {
             showToast("Update Failed: " + data.detail, "error");
@@ -952,6 +1071,8 @@ async function deleteTransaction(id) {
     if (isDeleting) {
         return;
     }
+
+    captureEditContext();
     
     // Close edit modal and show confirmation
     closeEditModal();
@@ -974,13 +1095,16 @@ async function performDelete(id) {
         const data = await res.json();
         if (data.status === "Deleted Successfully") {
             showToast("Transaction Deleted", "success");
+            markTxnHighlight(id, 'deleted');
             
             // Reload data
             if (isViewActive('ledgerView')) loadLedgerReport();
             invalidateTxnCache();
-            await loadTransactions(currentTxnPage, true);
+            await loadTransactions(currentTxnPage, true, { resetScroll: false });
             updateDashboard();
             unlockUiAfterModal();
+            refreshDayBookIfNeeded();
+            restoreEditContext();
             
             // CRITICAL: Completely reset input interactivity
             setTimeout(() => {
@@ -1492,6 +1616,10 @@ window.onload = function () {
     if (shortFrom && !shortFrom.value) {
         setReportRange('short', 30);
     }
+    const purchaseFrom = document.getElementById('purchaseFrom');
+    if (purchaseFrom && !purchaseFrom.value) {
+        setReportRange('purchase', 30);
+    }
     
     // Failsafe: periodically check if modals are blocking the app
     setInterval(() => {
@@ -1641,23 +1769,52 @@ function renderVirtualizedDayBook(resetScroll = false) {
 
     const topPad = start * DAYBOOK_ROW_HEIGHT;
     const bottomPad = Math.max(0, (total - end) * DAYBOOK_ROW_HEIGHT);
-    const colspan = 6;
+    const colspan = currentRole === 'admin' ? 7 : 6;
+
+    const headerRow = document.querySelector('#dayBookTable thead tr');
+    if (headerRow) {
+        const existHeader = headerRow.querySelector('.action-header');
+        if (existHeader) existHeader.remove();
+        if (currentRole === 'admin') {
+            const th = document.createElement('th');
+            th.className = 'action-header';
+            th.innerText = 'Action';
+            headerRow.appendChild(th);
+        }
+    }
 
     let rowsHTML = '';
     if (topPad > 0) {
         rowsHTML += `<tr class="daybook-spacer"><td colspan="${colspan}" style="height:${topPad}px; border:none; padding:0;"></td></tr>`;
     }
 
+    pruneTxnHighlights();
     for (let i = start; i < end; i += 1) {
         const row = data[i];
+        const rowClass = getTxnHighlightClass(row.id);
+        let actionCell = "";
+        if (currentRole === 'admin') {
+            actionCell = `<td class="action-cell">
+                <button class="btn-action edit" onclick="openEditModal('${row.id}')" title="Edit">
+                    <ion-icon name="create-outline"></ion-icon>
+                    <span>Edit</span>
+                </button>
+                <button class="btn-action delete" onclick="if(!window.isDeleting) deleteTransaction('${row.id}')" title="Delete">
+                    <ion-icon name="trash-outline"></ion-icon>
+                    <span>Del</span>
+                </button>
+            </td>`;
+        }
+
         rowsHTML += `
-        <tr>
+        <tr${rowClass ? ` class="${rowClass}"` : ''}>
             <td>${formatDateShort(row.date)}</td>
             <td>${row.bill_no || ''}</td>
             <td>${row.party}</td>
             <td>${row.type}</td>
             <td>${row.mode}</td>
             <td class="text-right">${formatMoney(row.amount)}</td>
+            ${actionCell}
         </tr>`;
     }
 
@@ -1715,9 +1872,24 @@ async function loadDayBookFallback(date) {
 }
 
 function renderDayBookRows(rows) {
-    dayBookRows = rows || [];
+    dayBookRows = (rows || []).slice().sort((a, b) => {
+        const da = new Date(a.date || 0).getTime();
+        const db = new Date(b.date || 0).getTime();
+        if (da !== db) return db - da;
+        const bb = getBillSortValue(a.bill_no);
+        const ba = getBillSortValue(b.bill_no);
+        if (ba !== bb) return ba - bb;
+        return String(a.bill_no || '').localeCompare(String(b.bill_no || ''));
+    });
     initDayBookVirtualScroll();
     renderVirtualizedDayBook(true);
+}
+
+function refreshDayBookIfNeeded() {
+    const dateInput = document.getElementById('dayBookDate');
+    const date = dateInput ? dateInput.value : '';
+    if (!date) return;
+    loadDayBook();
 }
 
 function exportDayBook() {
@@ -1821,6 +1993,94 @@ async function showShortReport() {
             });
             html += `</tbody></table>`;
             summaryDiv.innerHTML = html;
+        }
+    }
+}
+
+async function showPurchaseReport() {
+    showView('purchaseReportView');
+    const monthlyBody = document.getElementById('purchaseMonthlyBody');
+    const supplierBody = document.getElementById('purchaseSupplierBody');
+    const summaryEl = document.getElementById('purchaseSummary');
+
+    if (monthlyBody) monthlyBody.innerHTML = `<tr><td colspan="2" class="text-right">Loading...</td></tr>`;
+    if (supplierBody) supplierBody.innerHTML = `<tr><td colspan="2" class="text-right">Loading...</td></tr>`;
+    if (summaryEl) summaryEl.innerHTML = '';
+
+    let monthlyData = [];
+    let supplierData = [];
+    try {
+        const partyInput = document.getElementById('purchaseParty');
+        const partyName = partyInput ? partyInput.value.trim() : '';
+        const baseQuery = buildReportQuery('purchase');
+        const params = new URLSearchParams(baseQuery.replace(/^\?/, ''));
+        if (partyName) {
+            params.set('party', partyName);
+        }
+        const query = params.toString() ? `?${params.toString()}` : '';
+        const [monthlyRes, supplierRes] = await Promise.all([
+            fetchReport(`http://127.0.0.1:8000/report/purchase/monthly${query}`),
+            fetchReport(`http://127.0.0.1:8000/report/purchase/supplier${query}`)
+        ]);
+        monthlyData = await monthlyRes.json();
+        supplierData = await supplierRes.json();
+    } catch (e) {
+        showToast('Purchase report failed: ' + e.message, 'error');
+        if (monthlyBody) monthlyBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        if (supplierBody) supplierBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
+    if (monthlyBody) {
+        monthlyBody.innerHTML = '';
+        if (!monthlyData || monthlyData.length === 0) {
+            monthlyBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        } else {
+            let monthlyTotal = 0;
+            monthlyData.forEach(row => {
+                const amt = Number(row.total_amount || 0);
+                monthlyTotal += amt;
+                monthlyBody.innerHTML += `
+                    <tr>
+                        <td>${row.month || ''}</td>
+                        <td class="text-right">${formatMoney(amt)}</td>
+                    </tr>`;
+            });
+            monthlyBody.innerHTML += `
+                <tr style="font-weight:bold;">
+                    <td>Total</td>
+                    <td class="text-right">${formatMoney(monthlyTotal)}</td>
+                </tr>`;
+        }
+    }
+
+    if (supplierBody) {
+        supplierBody.innerHTML = '';
+        if (!supplierData || supplierData.length === 0) {
+            supplierBody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        } else {
+            let supplierTotal = 0;
+            supplierData.forEach(row => {
+                const amt = Number(row.total_amount || 0);
+                supplierTotal += amt;
+                supplierBody.innerHTML += `
+                    <tr>
+                        <td>${row.party || ''}</td>
+                        <td class="text-right">${formatMoney(amt)}</td>
+                    </tr>`;
+            });
+            supplierBody.innerHTML += `
+                <tr style="font-weight:bold;">
+                    <td>Total</td>
+                    <td class="text-right">${formatMoney(supplierTotal)}</td>
+                </tr>`;
+
+            if (summaryEl) {
+                summaryEl.innerHTML = `
+                    <div style="padding: 12px 14px; background: var(--card-bg); border-radius: 8px; text-align:center; font-weight: 600;">
+                        Total Purchase: ${formatMoney(supplierTotal)} | Parties: ${supplierData.length}
+                    </div>`;
+            }
         }
     }
 }

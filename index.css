@@ -368,6 +368,44 @@ table {
     margin-top: 20px;
 }
 
+.report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    gap: 12px;
+    flex-wrap: wrap;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.report-table {
+    margin-top: 12px;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.card .report-table {
+    margin-top: 0;
+}
+
+.report-summary-card {
+    margin: 12px 0 16px;
+    padding: 16px;
+    background: var(--surface);
+    border-radius: 8px;
+    font-size: 18px;
+    font-weight: bold;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border);
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+}
+
 .txn-table-container {
     max-height: calc(100vh - 260px);
     overflow-y: auto;
@@ -656,6 +694,14 @@ tr:last-child td {
 
 tr:hover td {
     background: #F5F5F7;
+}
+
+tr.row-edited td {
+    background: rgba(16, 185, 129, 0.16) !important;
+}
+
+tr.row-deleted td {
+    background: rgba(239, 68, 68, 0.16) !important;
 }
 
 /* Ledger: add clear grid lines for readability */

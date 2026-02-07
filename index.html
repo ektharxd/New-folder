@@ -163,6 +163,9 @@
             <a class="nav-item" onclick="showShortReport(); activateNav(this)">
                 <ion-icon name="alert-outline"></ion-icon> Short Report
             </a>
+               <a class="nav-item" onclick="showPurchaseReport(); activateNav(this)">
+                   <ion-icon name="cart-outline"></ion-icon> Purchase Report
+               </a>
             <a class="nav-item" onclick="showExpenseReport(); activateNav(this)">
                 <ion-icon name="wallet-outline"></ion-icon> Expenses
             </a>
@@ -532,7 +535,59 @@
                     <tbody id="shortReportBody"></tbody>
                 </table>
                 <div id="shortReportSummary" style="margin-top: 16px;"></div>
-            </div>
+                </div>
+
+                <!-- Purchase Report View -->
+                <div id="purchaseReportView" class="view-section">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2>Purchase Report</h2>
+                        <div>
+                            <button class="secondary" onclick="exportTableToExcel('purchaseMonthlyTable', 'Monthly_Purchase_Report')">Export Monthly</button>
+                            <button class="secondary" onclick="exportTableToExcel('purchaseSupplierTable', 'Party_Purchase_Report')">Export Party</button>
+                            <button class="secondary" onclick="window.print()">Print</button>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-bottom: 16px; padding: 12px; display:flex; flex-wrap: wrap; gap: 12px; align-items:center;">
+                        <label style="display:flex; align-items:center; gap: 8px;">
+                            From:
+                            <input type="date" id="purchaseFrom" style="width: 150px;">
+                        </label>
+                        <label style="display:flex; align-items:center; gap: 8px;">
+                            To:
+                            <input type="date" id="purchaseTo" style="width: 150px;">
+                        </label>
+                        <label style="display:flex; align-items:center; gap: 8px;">
+                            Party:
+                            <input type="text" id="purchaseParty" list="partyList" placeholder="Search party..." style="width: 200px;">
+                        </label>
+                        <button class="secondary" onclick="setReportRange('purchase', 30)">Last 30 Days</button>
+                        <button class="secondary" onclick="setReportRange('purchase', 90)">Last 90 Days</button>
+                        <button onclick="showPurchaseReport()">Apply</button>
+                    </div>
+
+                    <h3 style="margin: 10px 0 8px;">Monthly Purchase</h3>
+                    <table id="purchaseMonthlyTable">
+                        <thead>
+                            <tr>
+                                <th>Month</th>
+                                <th class="text-right">Total Purchase</th>
+                            </tr>
+                        </thead>
+                        <tbody id="purchaseMonthlyBody"></tbody>
+                    </table>
+
+                    <h3 style="margin: 18px 0 8px;">Party-wise Purchase</h3>
+                    <table id="purchaseSupplierTable">
+                        <thead>
+                            <tr>
+                                <th>Party</th>
+                                <th class="text-right">Total Purchase</th>
+                            </tr>
+                        </thead>
+                        <tbody id="purchaseSupplierBody"></tbody>
+                    </table>
+                    <div id="purchaseSummary" style="margin-top: 16px;"></div>
+                </div>
 
             <!-- Mode Report View -->
             <div id="modeReportView" class="view-section">
@@ -552,15 +607,14 @@
 
             <!-- Expense Report View -->
             <div id="expenseReportView" class="view-section">
-                <h2>Expense Report</h2>
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-                    <div></div>
+                <div class="report-header">
+                    <h2>Expense Report</h2>
                     <div>
                         <button class="secondary" onclick="exportTableToExcel('expenseReportTable', 'Expense_Report')">Export Excel</button>
                         <button class="secondary" onclick="window.print()">Print</button>
                     </div>
                 </div>
-                <table id="expenseReportTable">
+                <table id="expenseReportTable" class="report-table">
                     <thead>
                         <tr>
                             <th>Date</th>
@@ -575,7 +629,7 @@
 
             <!-- Outstanding View -->
             <div id="outstandingView" class="view-section">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="report-header">
                     <h2>Credit Outstanding</h2>
                     <div style="display:flex; gap: 10px; align-items:center;">
                         <button class="secondary" onclick="exportTableToExcel('outstandingTable', 'Credit_Outstanding')">Export Excel</button>
@@ -589,10 +643,10 @@
                             onkeyup="filterTable('outstandingBody', this.value, true)" style="width: 200px;">
                     </div>
                 </div>
-                <div style="margin: 12px 0; padding: 16px; background: var(--card-bg); border-radius: 8px; font-size: 18px; font-weight: bold; text-align: center;">
+                <div class="report-summary-card">
                     Total Outstanding: <span id="totalOutstanding" style="color: #FF6B6B;">₹0.00</span>
                 </div>
-                <table id="outstandingTable">
+                <table id="outstandingTable" class="report-table">
                     <thead>
                         <tr>
                             <th>Party</th>
@@ -605,7 +659,7 @@
 
             <!-- Trial Balance View -->
             <div id="trialBalanceView" class="view-section">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="report-header">
                     <h2>Trial Balance</h2>
                     <div>
                         <button class="secondary"
@@ -613,7 +667,7 @@
                         <button class="secondary" onclick="window.print()">Print</button>
                     </div>
                 </div>
-                <table>
+                <table class="report-table">
                     <thead>
                         <tr>
                             <th>Account / Party</th>
@@ -627,9 +681,11 @@
 
             <!-- PnL View -->
             <div id="pnlView" class="view-section">
-                <h2>Profit & Loss</h2>
+                <div class="report-header">
+                    <h2>Profit & Loss</h2>
+                </div>
                 <div class="card">
-                    <table style="box-shadow: none;">
+                    <table class="report-table" style="box-shadow: none;">
                         <tr>
                             <td>Total Sales</td>
                             <td class="text-right" id="pnlSales">0</td>

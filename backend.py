@@ -753,6 +753,83 @@ def get_type_report(txn_type: str):
             "amount": float(r[4])
         })
     return result
+
+@app.get("/report/purchase/monthly")
+def get_purchase_monthly_report(start: Optional[str] = None, end: Optional[str] = None, days: int = 30):
+    start_date, end_date = resolve_date_range(start, end, days)
+    cache_key = (current_company or "default", "purchase_monthly", str(start_date), str(end_date))
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            CONVERT(varchar(7), t.txn_date, 23) AS month_key,
+            SUM(t.amount) AS total_amount
+        FROM transactions t
+        JOIN parties p ON t.party_id = p.party_id
+                WHERE t.txn_date BETWEEN ? AND ?
+                    AND t.txn_type = 'Sale'
+                    AND p.type IN ('Customer', 'Credit Customer')
+        GROUP BY CONVERT(varchar(7), t.txn_date, 23)
+        ORDER BY month_key
+        """,
+        (start_date, end_date)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = [
+        {
+            "month": r[0],
+            "total_amount": float(r[1] or 0)
+        }
+        for r in rows
+    ]
+    cache_set(cache_key, result)
+    return result
+
+@app.get("/report/purchase/supplier")
+def get_purchase_supplier_report(start: Optional[str] = None, end: Optional[str] = None, days: int = 30, party: Optional[str] = None):
+    start_date, end_date = resolve_date_range(start, end, days)
+    cache_key = (current_company or "default", "purchase_supplier", str(start_date), str(end_date), (party or "").strip())
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    base_query = """
+        SELECT
+            p.name,
+            SUM(t.amount) AS total_amount
+        FROM transactions t
+        JOIN parties p ON t.party_id = p.party_id
+        WHERE t.txn_date BETWEEN ? AND ?
+          AND t.txn_type = 'Sale'
+          AND p.type IN ('Customer', 'Credit Customer')
+    """
+    params = [start_date, end_date]
+    if party and party.strip():
+        base_query += " AND p.name = ?"
+        params.append(party.strip())
+    base_query += " GROUP BY p.name ORDER BY p.name"
+    cursor.execute(base_query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = [
+        {
+            "party": r[0],
+            "total_amount": float(r[1] or 0)
+        }
+        for r in rows
+    ]
+    cache_set(cache_key, result)
+    return result
 @app.get("/report/outstanding")
 def get_outstanding_report():
     conn = get_db_connection()
