@@ -463,6 +463,19 @@
                             <button class="secondary" onclick="window.print()">Print</button>
                     </div>
                 </div>
+                <div class="card" style="margin-bottom: 16px; padding: 12px; display:flex; flex-wrap: wrap; gap: 12px; align-items:center;">
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        From:
+                        <input type="date" id="dailyFrom" style="width: 150px;">
+                    </label>
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        To:
+                        <input type="date" id="dailyTo" style="width: 150px;">
+                    </label>
+                    <button class="secondary" onclick="setReportRange('daily', 30)">Last 30 Days</button>
+                    <button class="secondary" onclick="setReportRange('daily', 90)">Last 90 Days</button>
+                    <button onclick="showDailySummary()">Apply</button>
+                </div>
                 <table id="dailySummaryTable">
                     <thead>
                         <tr>
@@ -490,6 +503,19 @@
                         <button class="secondary" onclick="exportTableToExcel('shortReportTable', 'Short_Excess_Report')">Export Excel</button>
                         <button class="secondary" onclick="window.print()">Print</button>
                     </div>
+                </div>
+                <div class="card" style="margin-bottom: 16px; padding: 12px; display:flex; flex-wrap: wrap; gap: 12px; align-items:center;">
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        From:
+                        <input type="date" id="shortFrom" style="width: 150px;">
+                    </label>
+                    <label style="display:flex; align-items:center; gap: 8px;">
+                        To:
+                        <input type="date" id="shortTo" style="width: 150px;">
+                    </label>
+                    <button class="secondary" onclick="setReportRange('short', 30)">Last 30 Days</button>
+                    <button class="secondary" onclick="setReportRange('short', 90)">Last 90 Days</button>
+                    <button onclick="showShortReport()">Apply</button>
                 </div>
                 <table id="shortReportTable">
                     <thead>

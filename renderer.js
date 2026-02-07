@@ -98,6 +98,7 @@ window.requestUpdateCheck = requestUpdateCheck;
 
 const PARTY_CACHE_TTL_MS = 5 * 60 * 1000;
 let partyCache = { data: null, ts: 0 };
+const REPORT_TIMEOUT_MS = 20000;
 
 // Centralized fetch wrapper with timeout and error handling
 async function fetchWithTimeout(url, options = {}, timeout = 5000) {
@@ -117,6 +118,10 @@ async function fetchWithTimeout(url, options = {}, timeout = 5000) {
         }
         throw error;
     }
+}
+
+function fetchReport(url) {
+    return fetchWithTimeout(url, {}, REPORT_TIMEOUT_MS);
 }
 
 async function loadParties(force = false) {
@@ -1322,6 +1327,62 @@ function formatDateShort(dateStr) {
     return `${dd}-${mm}-${yyyy}`;
 }
 
+function formatDateInput(date) {
+    return date.toISOString().slice(0, 10);
+}
+
+function setReportRange(prefix, days) {
+    const toEl = document.getElementById(`${prefix}To`);
+    const fromEl = document.getElementById(`${prefix}From`);
+    if (!toEl || !fromEl) return;
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - (days - 1));
+    toEl.value = formatDateInput(end);
+    fromEl.value = formatDateInput(start);
+    sessionStorage.setItem(`${prefix}ReportRange`, JSON.stringify({
+        from: fromEl.value,
+        to: toEl.value
+    }));
+}
+
+function getReportRange(prefix) {
+    const toEl = document.getElementById(`${prefix}To`);
+    const fromEl = document.getElementById(`${prefix}From`);
+    if (!toEl || !fromEl) return null;
+
+    if (fromEl.value && toEl.value) {
+        return { from: fromEl.value, to: toEl.value };
+    }
+
+    const stored = sessionStorage.getItem(`${prefix}ReportRange`);
+    if (stored) {
+        try {
+            const parsed = JSON.parse(stored);
+            if (parsed && parsed.from && parsed.to) {
+                fromEl.value = parsed.from;
+                toEl.value = parsed.to;
+                return { from: parsed.from, to: parsed.to };
+            }
+        } catch (e) {
+            // ignore parse errors
+        }
+    }
+
+    setReportRange(prefix, 30);
+    return { from: fromEl.value, to: toEl.value };
+}
+
+function buildReportQuery(prefix) {
+    const range = getReportRange(prefix);
+    if (!range) return "";
+    const params = new URLSearchParams({
+        start: range.from,
+        end: range.to
+    });
+    return `?${params.toString()}`;
+}
+
 async function requestUpdateCheck() {
     const statusEl = document.getElementById('updateStatus');
     const lastCheckedEl = document.getElementById('updateLastChecked');
@@ -1422,6 +1483,15 @@ window.onload = function () {
     }
 
     initUpdateBadge();
+
+    const dailyFrom = document.getElementById('dailyFrom');
+    if (dailyFrom && !dailyFrom.value) {
+        setReportRange('daily', 30);
+    }
+    const shortFrom = document.getElementById('shortFrom');
+    if (shortFrom && !shortFrom.value) {
+        setReportRange('short', 30);
+    }
     
     // Failsafe: periodically check if modals are blocking the app
     setInterval(() => {
@@ -1476,9 +1546,19 @@ async function checkBackendStatus() {
 // Other Reports (Keeping existing logic mostly same but adding Error Handling)
 async function showDailySummary() {
     showView('dailySummaryView');
-    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/daily-summary");
-    const data = await res.json();
     const tbody = document.getElementById("dailySummaryBody");
+    tbody.innerHTML = `<tr><td colspan="10" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport(`http://127.0.0.1:8000/report/daily-summary${buildReportQuery('daily')}`);
+        data = await res.json();
+    } catch (e) {
+        showToast("Daily Summary failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="10" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
 
     if (!data || data.length === 0) {
@@ -1648,12 +1728,22 @@ function exportDayBook() {
 
 async function showShortReport() {
     showView('shortReportView');
-    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/short-excess");
-    const data = await res.json();
     const tbody = document.getElementById("shortReportBody");
     const summaryDiv = document.getElementById("shortReportSummary");
-    tbody.innerHTML = "";
+    tbody.innerHTML = `<tr><td colspan="7" class="text-right">Loading...</td></tr>`;
     if (summaryDiv) summaryDiv.innerHTML = "";
+
+    let data = [];
+    try {
+        const res = await fetchReport(`http://127.0.0.1:8000/report/short-excess${buildReportQuery('short')}`);
+        data = await res.json();
+    } catch (e) {
+        showToast("Short Report failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="7" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = "";
 
     if (!data || data.length === 0) {
         tbody.innerHTML = `<tr><td colspan="7" class="text-right">No Data</td></tr>`;
@@ -1769,9 +1859,19 @@ async function saveCashInHand(dateStr) {
 async function showModeReport(mode) {
     showView('modeReportView');
     document.getElementById("modeTitle").innerText = `${mode} Ledger`;
-    const res = await fetchWithTimeout(`http://127.0.0.1:8000/report/mode/${mode}`);
-    const data = await res.json();
     const tbody = document.getElementById("modeReportBody");
+    tbody.innerHTML = `<tr><td colspan="4" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport(`http://127.0.0.1:8000/report/mode/${mode}`);
+        data = await res.json();
+    } catch (e) {
+        showToast("Mode report failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="4" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
     data.forEach(row => {
         tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.type}</td><td class="text-right">${formatMoney(row.amount)}</td></tr>`;
@@ -1780,9 +1880,19 @@ async function showModeReport(mode) {
 
 async function showExpenseReport() {
     showView('expenseReportView');
-    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/type/Expense");
-    const data = await res.json();
     const tbody = document.getElementById("expenseReportBody");
+    tbody.innerHTML = `<tr><td colspan="4" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/type/Expense");
+        data = await res.json();
+    } catch (e) {
+        showToast("Expense report failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="4" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
     data.forEach(row => {
         tbody.innerHTML += `<tr><td>${formatDateShort(row.date)}</td><td>${row.party}</td><td>${row.mode}</td><td class="text-right">${formatMoney(row.amount)}</td></tr>`;
@@ -1791,8 +1901,16 @@ async function showExpenseReport() {
 
 async function showOutstanding() {
     showView('outstandingView');
-    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/outstanding");
-    const result = await res.json();
+    let result = { data: [], total: 0 };
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/outstanding");
+        result = await res.json();
+    } catch (e) {
+        showToast("Outstanding report failed: " + e.message, "error");
+        const tbody = document.getElementById("outstandingBody");
+        if (tbody) tbody.innerHTML = `<tr><td colspan="2" class="text-right">No Data</td></tr>`;
+        return;
+    }
     outstandingData = result.data || [];
     const totalSpan = document.getElementById("totalOutstanding");
     if (totalSpan) totalSpan.textContent = `₹${formatMoney(result.total)}`;
@@ -1828,9 +1946,19 @@ function renderOutstanding() {
 
 async function showTrialBalance() {
     showView('trialBalanceView');
-    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/trial-balance");
-    const data = await res.json();
     const tbody = document.getElementById("trialBalanceBody");
+    tbody.innerHTML = `<tr><td colspan="3" class="text-right">Loading...</td></tr>`;
+
+    let data = [];
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/trial-balance");
+        data = await res.json();
+    } catch (e) {
+        showToast("Trial Balance failed: " + e.message, "error");
+        tbody.innerHTML = `<tr><td colspan="3" class="text-right">No Data</td></tr>`;
+        return;
+    }
+
     tbody.innerHTML = "";
     let tD = 0, tC = 0;
     data.forEach(row => {
@@ -1842,12 +1970,16 @@ async function showTrialBalance() {
 
 async function showPnL() {
     showView('pnlView');
-    const res = await fetchWithTimeout("http://127.0.0.1:8000/report/pnl");
-    const data = await res.json();
-    document.getElementById("pnlSales").innerText = formatMoney(data.sales);
-    document.getElementById("pnlExpenses").innerText = formatMoney(data.expenses);
-    document.getElementById("pnlProfit").innerText = formatMoney(data.net_profit);
-    document.getElementById("pnlProfit").style.color = data.net_profit >= 0 ? "var(--success)" : "var(--danger)";
+    try {
+        const res = await fetchReport("http://127.0.0.1:8000/report/pnl");
+        const data = await res.json();
+        document.getElementById("pnlSales").innerText = formatMoney(data.sales);
+        document.getElementById("pnlExpenses").innerText = formatMoney(data.expenses);
+        document.getElementById("pnlProfit").innerText = formatMoney(data.net_profit);
+        document.getElementById("pnlProfit").style.color = data.net_profit >= 0 ? "var(--success)" : "var(--danger)";
+    } catch (e) {
+        showToast("P&L failed: " + e.message, "error");
+    }
 }
 
 // Backup & Import

@@ -1,7 +1,7 @@
 {
   "name": "m-finlogs",
   "productName": "M-Finlogs",
-  "version": "0.1.2-gamma.0",
+  "version": "0.1.2-gamma.1",
   "description": "Accounting Software for M-Finlogs",
   "main": "main.js",
   "scripts": {

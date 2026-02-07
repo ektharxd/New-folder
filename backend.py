@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import pyodbc
 import hashlib
 import datetime
+import time
 import os
 import re
 from typing import Optional
@@ -47,6 +48,40 @@ def get_backup_target_dir() -> str:
     return load_runtime_config().get("backup_dir", "") or ""
 
 app = FastAPI()
+
+REPORT_CACHE_TTL_SEC = 300
+report_cache = {}
+
+def cache_get(key):
+    entry = report_cache.get(key)
+    if not entry:
+        return None
+    ts, data = entry
+    if time.time() - ts > REPORT_CACHE_TTL_SEC:
+        report_cache.pop(key, None)
+        return None
+    return data
+
+def cache_set(key, data):
+    report_cache[key] = (time.time(), data)
+
+def invalidate_report_cache():
+    report_cache.clear()
+
+def parse_date_str(value: Optional[str]) -> Optional[datetime.date]:
+    if not value:
+        return None
+    try:
+        return datetime.datetime.strptime(value, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def resolve_date_range(start: Optional[str], end: Optional[str], days: int = 30):
+    end_date = parse_date_str(end) or datetime.date.today()
+    start_date = parse_date_str(start) or (end_date - datetime.timedelta(days=max(days, 1) - 1))
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    return start_date, end_date
 
 current_company = None
 initialized_dbs = set()  # Cache to track initialized databases
@@ -154,6 +189,10 @@ def init_db(company_name: str):
     cursor.execute("""
         IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_transactions_date_id' AND object_id = OBJECT_ID('transactions'))
         CREATE INDEX idx_transactions_date_id ON transactions(txn_date DESC, txn_id DESC)
+    """)
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_transactions_date_type_mode' AND object_id = OBJECT_ID('transactions'))
+        CREATE INDEX idx_transactions_date_type_mode ON transactions(txn_date, txn_type, payment_mode)
     """)
     cursor.execute("""
         IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_parties_normalized' AND object_id = OBJECT_ID('parties'))
@@ -269,6 +308,7 @@ def log_audit(username, action, details, company=None):
         cursor = conn.cursor()
         cursor.execute("INSERT INTO audit_logs (username, action, details, company) VALUES (?, ?, ?, ?)", (username, action, details, comp))
         conn.close()
+        invalidate_report_cache()
     except:
         pass
 
@@ -375,6 +415,7 @@ def add_transaction(date: str, bill_no: str, party: str, txn_type: str, mode: st
             (date, bill_no, party_id, txn_type, mode, amount)
         )
         conn.close()
+        invalidate_report_cache()
         return {"status": "Transaction Added"}
     except Exception as e:
         conn.close()
@@ -1085,105 +1126,124 @@ async def import_transactions(file: UploadFile = File(...)):
     except Exception as e:
         return {"status": "Error", "detail": str(e)}
 
+def get_opening_cash_before_date(cursor, start_date: datetime.date, opening_seed: float) -> float:
+    cursor.execute(
+        "SELECT TOP 1 cash_date, cash_in_hand FROM daily_cash WHERE cash_date < ? ORDER BY cash_date DESC",
+        (start_date,)
+    )
+    row = cursor.fetchone()
+    if row and row[1] is not None:
+        return float(row[1])
+
+    cursor.execute(
+        """
+        SELECT
+            SUM(CASE WHEN payment_mode='Cash' AND txn_type IN ('Sale','Receipt') THEN amount ELSE 0 END)
+            + SUM(CASE WHEN payment_mode='Credit' AND txn_type='Receipt' THEN amount ELSE 0 END) AS cash_in,
+            SUM(CASE WHEN payment_mode='Cash' AND txn_type='Expense' THEN amount ELSE 0 END) AS cash_expense
+        FROM transactions
+        WHERE txn_date < ?
+        """,
+        (start_date,)
+    )
+    sums = cursor.fetchone()
+    cash_in = float(sums[0] or 0)
+    cash_expense = float(sums[1] or 0)
+    return opening_seed + cash_in - cash_expense
+
 @app.get("/report/daily-summary")
-def get_daily_summary_report():
-    # Detailed Daily Sales Summary
+def get_daily_summary_report(start: Optional[str] = None, end: Optional[str] = None, days: int = 30):
+    start_date, end_date = resolve_date_range(start, end, days)
+    cache_key = (current_company or "default", "daily_summary", str(start_date), str(end_date))
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT txn_date FROM transactions")
-    txn_dates = {str(r[0]) for r in cursor.fetchall()}
 
-    cursor.execute("SELECT cash_date, cash_in_hand FROM daily_cash")
-    cash_rows = cursor.fetchall()
-    cash_map = {str(r[0]): float(r[1]) for r in cash_rows}
-
-    dates = sorted(txn_dates.union(set(cash_map.keys())))
-
-    # If no dates, return empty
+    cursor.execute(
+        """
+        SELECT DISTINCT d FROM (
+            SELECT txn_date AS d FROM transactions WHERE txn_date BETWEEN ? AND ?
+            UNION
+            SELECT cash_date AS d FROM daily_cash WHERE cash_date BETWEEN ? AND ?
+        ) dates
+        """,
+        (start_date, end_date, start_date, end_date)
+    )
+    date_rows = cursor.fetchall()
+    dates = sorted([r[0] for r in date_rows])
     if not dates:
         conn.close()
+        cache_set(cache_key, [])
         return []
 
-    # Load party types once
-    cursor.execute("SELECT party_id, type FROM parties")
-    party_types = {r[0]: (r[1] or "") for r in cursor.fetchall()}
+    cursor.execute(
+        """
+        SELECT cash_date, cash_in_hand
+        FROM daily_cash
+        WHERE cash_date BETWEEN ? AND ?
+        """,
+        (start_date, end_date)
+    )
+    cash_rows = cursor.fetchall()
+    cash_map = {r[0]: float(r[1]) for r in cash_rows}
 
-    # Load all transactions once
-    cursor.execute("""
-        SELECT txn_date, txn_type, payment_mode, amount, party_id
-        FROM transactions
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-
-    # Group transactions by date
-    tx_by_date = {}
-    for d, ttype, mode, amount, party_id in rows:
-        d_str = str(d)
-        tx_by_date.setdefault(d_str, []).append((ttype, mode, float(amount or 0), party_id))
+    cursor.execute(
+        """
+        SELECT
+            t.txn_date,
+            SUM(CASE WHEN t.txn_type='Sale' THEN t.amount ELSE 0 END) AS total_sales,
+            SUM(CASE WHEN t.payment_mode='Cash' AND t.txn_type IN ('Sale','Receipt') THEN t.amount ELSE 0 END)
+              + SUM(CASE WHEN t.payment_mode='Credit' AND t.txn_type='Receipt' THEN t.amount ELSE 0 END) AS cash_in,
+            SUM(CASE WHEN t.payment_mode='Cash' AND t.txn_type='Expense' THEN t.amount ELSE 0 END) AS cash_expense,
+            SUM(CASE WHEN t.payment_mode IN ('Bank','UPI','GPay','GPAY','Google Pay','GooglePay') AND t.txn_type IN ('Sale','Receipt') THEN t.amount ELSE 0 END) AS bank_in,
+            SUM(CASE WHEN t.txn_type='Sale' AND (p.type='Credit Customer' OR t.payment_mode='Credit') THEN t.amount ELSE 0 END) AS credit_sales,
+            SUM(CASE WHEN t.txn_type='Receipt' AND p.type='Credit Customer' THEN t.amount ELSE 0 END) AS credit_receipts
+        FROM transactions t
+        LEFT JOIN parties p ON t.party_id = p.party_id
+        WHERE t.txn_date BETWEEN ? AND ?
+        GROUP BY t.txn_date
+        """,
+        (start_date, end_date)
+    )
+    agg_rows = cursor.fetchall()
 
     opening_seed = get_setting("opening_cash_seed", 0.0)
+    opening_cash_seed = get_opening_cash_before_date(cursor, start_date, opening_seed) if dates else opening_seed
+    conn.close()
+
+    agg_map = {}
+    for row in agg_rows:
+        agg_map[row[0]] = {
+            "total_sales": float(row[1] or 0),
+            "cash_in": float(row[2] or 0),
+            "cash_expense": float(row[3] or 0),
+            "bank": float(row[4] or 0),
+            "credit_sales": float(row[5] or 0),
+            "credit_receipts": float(row[6] or 0)
+        }
+
     summary = []
     prev_cash_in_hand = None
-    prev_closing = opening_seed
+    prev_closing = opening_cash_seed
 
-    for idx, d_str in enumerate(dates):
+    for idx, d in enumerate(dates):
         if idx == 0:
-            opening_cash = opening_seed
+            opening_cash = opening_cash_seed
         else:
             opening_cash = prev_cash_in_hand if prev_cash_in_hand is not None else prev_closing
 
-        cash_in = 0.0
-        cash_expense = 0.0
-        bank = 0.0
-        credit_sale = 0.0
-        total_sales = 0.0
-
-        for ttype, mode, amt, party_id in tx_by_date.get(d_str, []):
-            ttype_norm = str(ttype).strip().lower()
-            mode_norm = str(mode).strip().lower()
-
-            if ttype_norm.startswith("rec"):
-                ttype_norm = "receipt"
-            elif ttype_norm.startswith("sal"):
-                ttype_norm = "sale"
-            elif ttype_norm.startswith("exp"):
-                ttype_norm = "expense"
-
-            if mode_norm.startswith("cas"):
-                mode_norm = "cash"
-            elif mode_norm.startswith("ban"):
-                mode_norm = "bank"
-            elif mode_norm.startswith("upi"):
-                mode_norm = "upi"
-            elif mode_norm.startswith("cre"):
-                mode_norm = "credit"
-            elif mode_norm in ["gpay", "g-pay", "googlepay", "google pay", "gp"]:
-                mode_norm = "gpay"
-
-            if ttype_norm == "sale":
-                total_sales += amt
-
-            party_type = (party_types.get(party_id) or "").strip().lower()
-            is_credit_customer = party_type == "credit customer"
-
-            if ttype_norm == "sale" and (is_credit_customer or mode_norm == "credit"):
-                credit_sale += amt
-            if ttype_norm == "receipt" and is_credit_customer:
-                credit_sale -= amt
-
-            if mode_norm == "cash" or (mode_norm == "credit" and ttype_norm == "receipt"):
-                if ttype_norm in ["sale", "receipt"]:
-                    cash_in += amt
-                elif ttype_norm == "expense":
-                    cash_expense += amt
-
-            if mode_norm in ["bank", "upi", "gpay"]:
-                if ttype_norm in ["sale", "receipt"]:
-                    bank += amt
+        agg = agg_map.get(d, {})
+        cash_in = agg.get("cash_in", 0.0)
+        cash_expense = agg.get("cash_expense", 0.0)
+        bank = agg.get("bank", 0.0)
+        total_sales = agg.get("total_sales", 0.0)
+        credit_sale = agg.get("credit_sales", 0.0) - agg.get("credit_receipts", 0.0)
 
         computed_closing = opening_cash + cash_in - cash_expense
-        cash_in_hand = cash_map.get(d_str)
+        cash_in_hand = cash_map.get(d)
         cash_short_excess = 0.0
         closing_cash = computed_closing
 
@@ -1192,7 +1252,7 @@ def get_daily_summary_report():
             closing_cash = cash_in_hand
 
         summary.append({
-            "date": d_str,
+            "date": str(d),
             "opening_cash": opening_cash,
             "cash_in": cash_in,
             "cash_expense": cash_expense,
@@ -1208,11 +1268,13 @@ def get_daily_summary_report():
         prev_cash_in_hand = cash_in_hand
         prev_closing = computed_closing
 
-    return sorted(summary, key=lambda x: x["date"], reverse=True)
+    summary = sorted(summary, key=lambda x: x["date"], reverse=True)
+    cache_set(cache_key, summary)
+    return summary
 
 @app.get("/report/short-excess")
-def get_short_excess_report():
-    data = get_daily_summary_report()
+def get_short_excess_report(start: Optional[str] = None, end: Optional[str] = None, days: int = 30):
+    data = get_daily_summary_report(start=start, end=end, days=days)
     return [
         {
             "date": row["date"],
@@ -1234,6 +1296,7 @@ def get_opening_cash():
 def set_opening_cash(req: OpeningCashRequest):
     try:
         set_setting("opening_cash_seed", float(req.amount))
+        invalidate_report_cache()
         log_audit(req.admin_user, "Set Opening Cash", f"Opening Cash Seed set to {req.amount}")
         return {"status": "Saved"}
     except Exception as e:
@@ -1251,6 +1314,7 @@ def set_cash_in_hand(req: CashInHandRequest):
         else:
             cursor.execute("INSERT INTO daily_cash (cash_date, cash_in_hand) VALUES (?, ?)", (req.date, req.cash_in_hand))
         conn.close()
+        invalidate_report_cache()
         log_audit(req.admin_user, "Set Cash In Hand", f"{req.date} = {req.cash_in_hand}")
         return {"status": "Saved"}
     except Exception as e:
@@ -1427,6 +1491,7 @@ def edit_transaction(req: EditTxnRequest):
             
         cursor.execute(f"UPDATE transactions SET {req.field}=? WHERE txn_id=?", (req.new_value, req.txn_id))
         conn.close()
+        invalidate_report_cache()
         
         log_audit(req.admin_user, "Edit Transaction", f"Changed {req.field} from {old_val} to {req.new_value} for Txn ID {req.txn_id}")
         return {"status": "Updated Successfully"}
@@ -1453,6 +1518,7 @@ def delete_transaction(req: DeleteTxnRequest):
         
         cursor.execute("DELETE FROM transactions WHERE txn_id=?", (req.txn_id,))
         conn.close()
+        invalidate_report_cache()
         
         log_audit(req.admin_user, "Delete Transaction", f"Deleted Txn ID {req.txn_id}. {details}")
         return {"status": "Deleted Successfully"}
